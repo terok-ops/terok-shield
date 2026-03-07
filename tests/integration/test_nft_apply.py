@@ -9,11 +9,11 @@ import pytest
 
 from terok_shield.nft import standard_ruleset, verify_ruleset
 
-from .conftest import nft_unusable, nsenter_nft
+from .conftest import nsenter_nft
 
 
 @pytest.mark.integration
-@nft_unusable
+@pytest.mark.usefixtures("nft_in_netns")
 class TestStandardApply:
     """Apply a standard-mode ruleset to a real container netns and verify."""
 

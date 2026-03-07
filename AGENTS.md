@@ -38,7 +38,8 @@ make check      # Run lint + test + tach + security + docstrings + deadcode + re
 
 **Integration tests (requires podman + nft on the host):**
 ```bash
-make test-podman  # Run integration tests against real podman containers
+poetry install --with test  # ensure terok-shield is installed in Poetry's venv
+make test-podman            # run integration tests against real podman containers
 ```
 
 **Other useful commands:**
@@ -103,11 +104,16 @@ The project uses [tach](https://github.com/gauge-sh/tach) to enforce module boun
 
 ## Integration Tests
 
-Integration tests live in `tests/integration/` and require podman and nft on the host. They are **not** run in CI (GitHub Actions lacks nftables kernel support for user namespaces). Run them manually via `make test-podman`.
+Integration tests live in `tests/integration/` and require podman and nft on the host. They are **not** run in CI (GitHub Actions lacks nftables kernel support for user namespaces).
 
-- Tests use `@pytest.mark.integration` and skip markers (`podman_missing`, `nft_unusable`) from `conftest.py`
-- `conftest.py` provides fixtures: `container` (disposable Alpine container), `container_pid`, and the `nsenter_nft()` helper
-- nft commands run inside the container's network namespace via `podman unshare nsenter -t PID -n nft`
+```bash
+poetry install --with test  # install package + test deps into Poetry's venv
+make test-podman            # run integration tests
+```
+
+- Tests use `@pytest.mark.integration` and skip markers (`podman_missing`, `nft_missing`) from `conftest.py`
+- `conftest.py` provides fixtures: `container` (disposable Alpine container), `container_pid`, `nft_in_netns` (session-scoped nft capability check), and the `nsenter_nft()` helper
+- nft commands run inside the container's network namespace via `podman unshare nsenter -t PID -n nft` (not the host netns — rootless nft only has `CAP_NET_ADMIN` inside container-owned namespaces)
 
 ## Key Guidelines
 

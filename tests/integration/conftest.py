@@ -24,19 +24,6 @@ def _has(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
-def _nft_usable() -> bool:
-    """Check if nft works inside a podman user namespace."""
-    if not _has("podman") or not _has("nft"):
-        return False
-    r = subprocess.run(
-        ["podman", "unshare", "nft", "list", "ruleset"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    return r.returncode == 0
-
-
 def _image_available() -> bool:
     """Check if the test image is already pulled."""
     r = subprocess.run(
@@ -47,10 +34,11 @@ def _image_available() -> bool:
 
 
 # ── Skip conditions ─────────────────────────────────────
+# Cheap binary-existence checks only.  The real nft capability check
+# is the session-scoped `nft_in_netns` fixture (needs a running container).
 
 podman_missing = pytest.mark.skipif(not _has("podman"), reason="podman not installed")
 nft_missing = pytest.mark.skipif(not _has("nft"), reason="nft not installed")
-nft_unusable = pytest.mark.skipif(not _nft_usable(), reason="nft not usable via podman unshare")
 
 
 # ── Fixtures ─────────────────────────────────────────────
@@ -63,6 +51,46 @@ def _pull_image():
         pytest.skip("podman not installed")
     if not _image_available():
         subprocess.run(["podman", "pull", IMAGE], check=True, timeout=120)
+
+
+@pytest.fixture(scope="session")
+def nft_in_netns():
+    """Verify nft works inside a container's network namespace.
+
+    Unlike ``podman unshare nft list ruleset`` (which operates on the
+    host netns and requires root), this tests the actual shield use case:
+    nft inside a container-owned netns via nsenter, where the user
+    namespace *does* have CAP_NET_ADMIN.
+    """
+    if not _has("podman") or not _has("nft"):
+        pytest.skip("podman or nft not installed")
+    name = f"{CTR_PREFIX}-nftcheck"
+    subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+    try:
+        subprocess.run(
+            ["podman", "run", "-d", "--name", name, IMAGE, "sleep", "30"],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        pid = subprocess.run(
+            ["podman", "inspect", "--format", "{{.State.Pid}}", name],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        r = subprocess.run(
+            ["podman", "unshare", "nsenter", "-t", pid, "-n", "nft", "list", "ruleset"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if r.returncode != 0:
+            pytest.skip(f"nft not usable inside container netns: {r.stderr.strip()}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        pytest.skip(f"nft pre-check failed: {e}")
+    finally:
+        subprocess.run(["podman", "rm", "-f", name], capture_output=True)
 
 
 @pytest.fixture

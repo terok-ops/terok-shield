@@ -17,7 +17,7 @@ from terok_shield.config import (
     shield_state_root,
 )
 
-from .conftest import nft_unusable, podman_missing
+from .conftest import podman_missing
 
 
 @pytest.mark.integration
@@ -74,8 +74,7 @@ class TestAutoDetect:
         mode = _auto_detect_mode()
         assert isinstance(mode, ShieldMode)
 
-    @nft_unusable
-    def test_at_least_standard_with_nft(self) -> None:
-        """If nft works via podman unshare, auto-detect returns at least STANDARD."""
+    def test_at_least_standard_with_nft(self, nft_in_netns: None) -> None:
+        """If nft works in a container netns, auto-detect returns at least STANDARD."""
         mode = _auto_detect_mode()
         assert mode in (ShieldMode.STANDARD, ShieldMode.HARDENED)
