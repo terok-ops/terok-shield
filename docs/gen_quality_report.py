@@ -182,11 +182,13 @@ def _section_docstring_coverage() -> str:
     """Generate docstring coverage section."""
     result = _run(str(_VENV_BIN / "docstr-coverage"), str(SRC), "--fail-under=0")
     output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        return f"!!! warning\n    docstr-coverage failed.\n\n```text\n{output}\n```\n"
     summary = []
     for line in output.splitlines():
         if any(kw in line for kw in ("Needed:", "Total coverage:", "Grade:")):
             summary.append(f"- {line.strip()}\n")
-    return "".join(summary) if summary else f"```\n{output}\n```\n"
+    return "".join(summary) if summary else f"```text\n{output}\n```\n"
 
 
 def generate_report() -> str:

@@ -22,7 +22,7 @@ The attacker has **arbitrary code execution inside the container** but does not 
 
 ### Trust boundaries
 
-```
+```text
 ┌─────────────────────────────────────────────┐
 │  Host                                       │
 │                                             │
@@ -71,13 +71,13 @@ Properties enforced by design:
 
 **Standard mode** (per-container netns, output chain):
 
-```
+```text
 loopback → established → DNS → gate port → RFC1918 reject → allow_v4 → deny all
 ```
 
 **Hardened mode** (rootless-netns, forward chain):
 
-```
+```text
 established → ICMP → DNS → gate → RFC1918 reject → intra-bridge → allow_v4 → deny all
 ```
 
