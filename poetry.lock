@@ -816,18 +816,18 @@ mkdocs = ">=1.1"
 
 [[package]]
 name = "mkdocs-gen-files"
-version = "0.6.0"
+version = "0.5.0"
 description = "MkDocs plugin to programmatically generate documentation pages during the build"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.7"
 groups = ["docs"]
 files = [
-    {file = "mkdocs_gen_files-0.6.0-py3-none-any.whl", hash = "sha256:815af15f3e2dbfda379629c1b95c02c8e6f232edf2a901186ea3b204ab1135b2"},
-    {file = "mkdocs_gen_files-0.6.0.tar.gz", hash = "sha256:52022dc14dcc0451e05e54a8f5d5e7760351b6701eff816d1e9739577ec5635e"},
+    {file = "mkdocs_gen_files-0.5.0-py3-none-any.whl", hash = "sha256:7ac060096f3f40bd19039e7277dd3050be9a453c8ac578645844d4d91d7978ea"},
+    {file = "mkdocs_gen_files-0.5.0.tar.gz", hash = "sha256:4c7cf256b5d67062a788f6b1d035e157fc1a9498c2399be9af5257d4ff4d19bc"},
 ]
 
 [package.dependencies]
-mkdocs = ">=1.4.1"
+mkdocs = ">=1.0.3"
 
 [[package]]
 name = "mkdocs-get-deps"
@@ -1570,4 +1570,4 @@ watchmedo = ["PyYAML (>=3.10)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "554f653696c1daccf9e24d6a5f8f083e1c52451a7512def75890836a29b7155a"
+content-hash = "2d50ebb6773b3aec21c596b7bad306ad4918abe795777a256a8b8cb9cd83f303"

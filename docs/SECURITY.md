@@ -83,6 +83,8 @@ established → ICMP → DNS → gate → RFC1918 reject → intra-bridge → al
 
 ## Fail-closed guarantees
 
+After running `terok-shield setup`, the following invariant holds: **no path from "firewall setup failed" to "container running unrestricted."**
+
 | Failure | Result |
 |---------|--------|
 | OCI hook raises an exception | Container torn down by podman (non-zero exit) |
@@ -90,9 +92,10 @@ established → ICMP → DNS → gate → RFC1918 reject → intra-bridge → al
 | Profile not found | `FileNotFoundError` → hook exits → container torn down |
 | Ruleset fails to load | Hook exits → container torn down |
 | Self-verification fails | Hook exits → container torn down |
-| Shield not set up | `is_shield_active()` returns False → container starts without firewall (warning printed) |
 
-After `terok-shield setup`, the invariant is: **no path from "firewall setup failed" to "container running unrestricted."**
+### Preconditions
+
+Before `terok-shield setup` is run, `is_shield_active()` returns `False` and containers start **without** firewall rules (a warning is printed). The fail-closed guarantee only applies after setup completes successfully.
 
 ## DNS allowlisting
 

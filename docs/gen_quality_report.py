@@ -38,6 +38,8 @@ def _run(
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="timed out")
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr=str(exc))
 
 
 def _nbsp_num(n: int) -> str:
@@ -160,6 +162,7 @@ def _section_dead_code() -> str:
         return "No dead code found at 80% confidence threshold.\n"
 
     lines = ["| Confidence | Location | Issue |\n", "|---:|---|---|\n"]
+    parsed = 0
     for line in output.splitlines():
         if "% confidence)" in line:
             parts = line.rsplit("(", 1)
@@ -169,6 +172,9 @@ def _section_dead_code() -> str:
             location = loc_parts[0] if loc_parts else location_msg
             message = loc_parts[1] if len(loc_parts) > 1 else ""
             lines.append(f"| {confidence} | `{location}` | {message} |\n")
+            parsed += 1
+    if parsed == 0 and result.returncode != 0:
+        return f"!!! warning\n    vulture failed.\n\n```text\n{output}\n```\n"
     return "".join(lines)
 
 

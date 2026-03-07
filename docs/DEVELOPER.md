@@ -19,6 +19,8 @@ make docstrings  # docstring coverage (95% minimum)
 make deadcode    # vulture dead code check
 make reuse       # SPDX license compliance
 make check       # all of the above
+make docs        # serve documentation locally
+make docs-build  # build documentation for deployment
 ```
 
 ## Module overview
