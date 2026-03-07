@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 terok contributors
+# SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
 """Generate a code quality report page for MkDocs.

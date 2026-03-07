@@ -42,7 +42,7 @@ make docs-build  # build documentation for deployment
 
 - **Python 3.12+** with type hints
 - **ruff** for linting and formatting (100 char line length)
-- **SPDX headers** on all `.py` files — use `make spdx` to add them
+- **SPDX headers** on all `.py` files — use `make spdx NAME="Jiri Vyskocil" FILES="path"` to add them. NAME must be the real name (ASCII-only) of the person who created the file
 - **Docstrings** on all public functions (95% coverage enforced)
 - **`nft.py` must not import non-stdlib modules** — this is the auditable security boundary
 

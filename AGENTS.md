@@ -39,7 +39,7 @@ make check      # Run lint + test + security + docstrings + deadcode + reuse (eq
 make install-dev  # Install all development dependencies
 make security     # Run bandit SAST scan
 make clean        # Remove build artifacts
-make spdx NAME="Your Name" FILES="src/terok_shield/new_file.py"  # Add SPDX header
+make spdx NAME="Jiri Vyskocil" FILES="src/terok_shield/new_file.py"  # Add SPDX header
 ```
 
 ## Coding Standards
@@ -52,10 +52,11 @@ make spdx NAME="Your Name" FILES="src/terok_shield/new_file.py"  # Add SPDX head
 - **Testing**: Add tests for new functionality; maintain coverage
 - **SPDX headers**: Every source file (`.py`, `.sh`, etc.) must start with a compact two-line SPDX header — no blank line between them:
   ```python
-  # SPDX-FileCopyrightText: 2026 terok contributors
+  # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
   # SPDX-License-Identifier: Apache-2.0
   ```
-  Use `make spdx NAME="Your Name" FILES="path/to/file.py"` to add headers. Files covered by `REUSE.toml` glob patterns (`.md`, `.yml`, `.toml`, `.json`, etc.) do not need inline headers. `make reuse` checks compliance.
+  Use `make spdx NAME="Jiri Vyskocil" FILES="path/to/file.py"` to add headers. Files covered by `REUSE.toml` glob patterns (`.md`, `.yml`, `.toml`, `.json`, etc.) do not need inline headers. `make reuse` checks compliance.
+  **Copyright holder**: NAME must be the real name of the person who created the file (ASCII-only, no project names). When creating new files, ask the user for their name if unknown. When modifying an existing file that already has an SPDX header, add a second copyright line with your own (or the contributor's) name — do not replace the original author.
 
 ## Security Boundary
 
@@ -76,7 +77,7 @@ make spdx NAME="Your Name" FILES="src/terok_shield/new_file.py"  # Add SPDX head
 ## Key Guidelines
 
 - **Fail-closed**: Any hook/ruleset failure must prevent the container from starting unrestricted
-- **DNS-only allowlisting**: Use domain names in `.txt` files, resolve to IPs at setup/runtime — no hardcoded IP ranges
+- **Allowlisting**: Both IP addresses and DNS domains are supported in `.txt` allowlists; bundled defaults use DNS names because they are more stable and easier to audit
 - **Minimal changes**: Make surgical, focused changes
 - **Existing tests**: Never remove or modify unrelated tests
 - **Dependencies**: Use Poetry; the only runtime dependency is PyYAML
