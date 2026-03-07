@@ -11,6 +11,8 @@ import pytest
 
 from terok_shield.audit import list_log_files, log_event, tail_log
 
+from .conftest import TEST_IP
+
 
 @pytest.mark.integration
 class TestAuditLive:
@@ -23,13 +25,13 @@ class TestAuditLive:
         monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", str(tmp_path))
 
         log_event("test-ctr", "setup", detail="integration test")
-        log_event("test-ctr", "allowed", dest="1.2.3.4")
+        log_event("test-ctr", "allowed", dest=TEST_IP)
         log_event("test-ctr", "denied", dest="10.0.0.1")
 
         events = list(tail_log("test-ctr", n=10))
         assert len(events) == 3
         assert events[0]["action"] == "setup"
-        assert events[1]["dest"] == "1.2.3.4"
+        assert events[1]["dest"] == TEST_IP
         assert events[2]["action"] == "denied"
 
     def test_jsonl_format(
