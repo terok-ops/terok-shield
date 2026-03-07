@@ -1,0 +1,61 @@
+.PHONY: all lint format test security docstrings complexity deadcode reuse check install install-dev clean spdx
+
+all: check
+
+# Run linter and format checker (fast, run before commits)
+lint:
+	poetry run ruff check .
+	poetry run ruff format --check .
+
+# Auto-fix lint issues and format code
+format:
+	poetry run ruff check --fix .
+	poetry run ruff format .
+
+# Run tests with coverage
+test:
+	poetry run pytest --cov=terok_shield --cov-report=term-missing
+
+# Run SAST security scan on shield module
+security:
+	poetry run bandit -r src/terok_shield/ -ll
+
+# Check docstring coverage (minimum 95%)
+docstrings:
+	poetry run docstr-coverage src/terok_shield/ --fail-under=95
+
+# Check cognitive complexity (advisory — lists functions exceeding threshold)
+complexity:
+	poetry run complexipy src/terok_shield/ --max-complexity-allowed 15 --failed; true
+
+# Find dead code (cross-file, min 80% confidence)
+deadcode:
+	poetry run vulture src/terok_shield/ vulture_whitelist.py --min-confidence 80
+
+# Check REUSE (SPDX license/copyright) compliance
+reuse:
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	poetry run reuse lint
+
+# Add SPDX header to files: make spdx FILES="src/terok_shield/foo.py" NAME="Your Name"
+spdx:
+ifndef NAME
+	$(error NAME is required. Usage: make spdx NAME="Your Name" FILES="src/terok_shield/foo.py")
+endif
+	poetry run reuse annotate --template compact --copyright "$(NAME)" --license Apache-2.0 $(FILES)
+
+# Run all checks (equivalent to CI)
+check: lint test security docstrings deadcode reuse
+
+# Install runtime dependencies only
+install:
+	poetry install --only main
+
+# Install all dependencies (dev, test)
+install-dev:
+	poetry install --with dev,test
+
+# Clean build artifacts
+clean:
+	rm -rf dist/ build/ .coverage coverage.xml .pytest_cache/ .ruff_cache/ .complexipy_cache/
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

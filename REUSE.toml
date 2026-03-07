@@ -1,0 +1,19 @@
+version = 1
+
+[[annotations]]
+path = [
+  "**/*.md",
+  "**/*.yml",
+  "**/*.yaml",
+  "**/*.toml",
+  "**/*.json",
+  "**/*.lock",
+  "**/*.txt",
+  "**/*.nft",
+  ".gitignore",
+  "MANIFEST.in",
+  "Makefile",
+  "vulture_whitelist.py",
+]
+SPDX-FileCopyrightText = "2026 terok contributors"
+SPDX-License-Identifier = "Apache-2.0"
