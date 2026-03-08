@@ -16,6 +16,7 @@ from terok_shield.config import (
 from terok_shield.hardened import (
     _read_resolved_cache,
     _safe_domain,
+    _update_dnsmasq_nftsets,
     allow_ip,
     deny_ip,
     list_rules,
@@ -307,3 +308,30 @@ class TestSafeDomain(unittest.TestCase):
     def test_rejects_empty(self):
         """Rejects empty strings."""
         self.assertFalse(_safe_domain(""))
+
+
+class TestUpdateDnsmasqNftsetsWarning(unittest.TestCase):
+    """Test _update_dnsmasq_nftsets logs warnings for invalid domains."""
+
+    @mock.patch("terok_shield.hardened.shield_resolved_dir")
+    def test_logs_warning_for_invalid_domains(self, mock_dir):
+        """Invalid domains produce a warning log."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            mock_dir.return_value = Path(td)
+            with self.assertLogs("terok_shield.hardened", level="WARNING") as cm:
+                _update_dnsmasq_nftsets("test", ["github.com", "evil/domain", "exam ple.com"])
+            self.assertEqual(len(cm.output), 2)
+            self.assertIn("evil/domain", cm.output[0])
+            self.assertIn("exam ple.com", cm.output[1])
+
+    @mock.patch("terok_shield.hardened.shield_resolved_dir")
+    def test_no_warning_for_all_valid_domains(self, mock_dir):
+        """All-valid domains produce no warnings."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            mock_dir.return_value = Path(td)
+            with self.assertNoLogs("terok_shield.hardened", level="WARNING"):
+                _update_dnsmasq_nftsets("test", ["github.com", "example.com"])

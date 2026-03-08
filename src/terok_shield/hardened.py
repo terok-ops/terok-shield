@@ -10,6 +10,7 @@ network and ``dnsmasq`` to be present on the host.
 """
 
 import ipaddress
+import logging
 import re
 
 from .config import (
@@ -32,6 +33,8 @@ from .nft import (
 from .nft_constants import NFT_TABLE_NAME
 from .profiles import compose_profiles
 from .run import ExecError, nft_via_rootless_netns, podman_inspect, run as run_cmd
+
+logger = logging.getLogger(__name__)
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SAFE_DOMAIN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.?$")
@@ -316,7 +319,7 @@ def _safe_domain(domain: str) -> bool:
 def _update_dnsmasq_nftsets(container: str, domains: list[str]) -> None:
     """Write dnsmasq nftset config for a container (best-effort).
 
-    Domains that fail validation are silently skipped.
+    Domains that fail validation are skipped with a warning.
 
     Args:
         container: Container name.
@@ -325,6 +328,9 @@ def _update_dnsmasq_nftsets(container: str, domains: list[str]) -> None:
     if not domains:
         return
     safe = safe_name(container)
+    for d in domains:
+        if not _safe_domain(d):
+            logger.warning("Skipping invalid domain %r for container %s", d, container)
     valid = [d for d in domains if _safe_domain(d)]
     if not valid:
         return
