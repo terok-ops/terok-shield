@@ -14,7 +14,6 @@ path = [
   ".gitignore",
   "MANIFEST.in",
   "Makefile",
-  "vulture_whitelist.py",
 ]
 SPDX-FileCopyrightText = "2026 Jiri Vyskocil"
 SPDX-License-Identifier = "Apache-2.0"

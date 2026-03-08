@@ -27,9 +27,9 @@ class TestShieldConfig(unittest.TestCase):
     """Tests for ShieldConfig dataclass."""
 
     def test_defaults(self) -> None:
-        """Default config is disabled with standard profiles."""
+        """Default config is standard with standard profiles."""
         cfg = ShieldConfig()
-        self.assertEqual(cfg.mode, ShieldMode.DISABLED)
+        self.assertEqual(cfg.mode, ShieldMode.STANDARD)
         self.assertEqual(cfg.default_profiles, ("dev-standard",))
         self.assertEqual(cfg.gate_port, 9418)
         self.assertTrue(cfg.audit_enabled)
@@ -44,7 +44,7 @@ class TestShieldConfig(unittest.TestCase):
         """Config is immutable."""
         cfg = ShieldConfig()
         with self.assertRaises(AttributeError):
-            cfg.mode = ShieldMode.STANDARD  # type: ignore[misc]
+            cfg.mode = ShieldMode.HARDENED  # type: ignore[misc]
 
 
 class TestPathHelpers(unittest.TestCase):
@@ -161,7 +161,7 @@ class TestLoadShieldConfig(unittest.TestCase):
             "os.environ", {"TEROK_SHIELD_CONFIG_DIR": "/nonexistent-path"}
         ):
             cfg = load_shield_config()
-            self.assertEqual(cfg.mode, ShieldMode.DISABLED)
+            self.assertEqual(cfg.mode, ShieldMode.STANDARD)
 
     def test_loads_yaml(self, tmp_path=None) -> None:
         """Load configuration from YAML file."""
@@ -212,19 +212,21 @@ class TestLoadShieldConfig(unittest.TestCase):
             config_file.write_text(": : : invalid yaml [[[")
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
-                self.assertEqual(cfg.mode, ShieldMode.DISABLED)
+                self.assertEqual(cfg.mode, ShieldMode.STANDARD)
 
-    def test_invalid_mode_returns_disabled(self) -> None:
-        """Return disabled for unknown mode string."""
+    def test_invalid_mode_raises(self) -> None:
+        """Raise ValueError for unknown mode string."""
         import tempfile
         from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.yml"
             config_file.write_text("mode: bogus\n")
-            with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
-                cfg = load_shield_config()
-                self.assertEqual(cfg.mode, ShieldMode.DISABLED)
+            with (
+                unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}),
+                self.assertRaises(ValueError),
+            ):
+                load_shield_config()
 
     def test_non_dict_yaml_returns_defaults(self) -> None:
         """Return defaults when YAML parses to non-dict (e.g. a list)."""
@@ -236,7 +238,7 @@ class TestLoadShieldConfig(unittest.TestCase):
             config_file.write_text("- item1\n- item2\n")
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
-                self.assertEqual(cfg.mode, ShieldMode.DISABLED)
+                self.assertEqual(cfg.mode, ShieldMode.STANDARD)
 
     def test_non_list_profiles_falls_back(self) -> None:
         """Non-list default_profiles value falls back to default."""
@@ -245,7 +247,7 @@ class TestLoadShieldConfig(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.yml"
-            config_file.write_text("default_profiles: not-a-list\n")
+            config_file.write_text("mode: standard\ndefault_profiles: not-a-list\n")
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
                 self.assertEqual(cfg.default_profiles, ("dev-standard",))
@@ -257,7 +259,7 @@ class TestLoadShieldConfig(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.yml"
-            config_file.write_text("audit: not-a-dict\n")
+            config_file.write_text("mode: standard\naudit: not-a-dict\n")
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
                 self.assertTrue(cfg.audit_enabled)
@@ -269,7 +271,7 @@ class TestLoadShieldConfig(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.yml"
-            config_file.write_text('audit:\n  enabled: "yes"\n  log_allowed: 42\n')
+            config_file.write_text('mode: standard\naudit:\n  enabled: "yes"\n  log_allowed: 42\n')
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
                 self.assertIs(cfg.audit_enabled, True)
@@ -293,13 +295,12 @@ class TestAutoDetectMode(unittest.TestCase):
 
     @unittest.mock.patch("shutil.which", return_value=None)
     @unittest.mock.patch("subprocess.run", side_effect=FileNotFoundError)
-    def test_no_tools_returns_disabled(
-        self, _run: unittest.mock.Mock, _which: unittest.mock.Mock
-    ) -> None:
-        """Return DISABLED when neither nft nor podman is available."""
+    def test_no_tools_raises(self, _run: unittest.mock.Mock, _which: unittest.mock.Mock) -> None:
+        """Raise RuntimeError when neither nft nor podman is available."""
         from terok_shield.config import _auto_detect_mode
 
-        self.assertEqual(_auto_detect_mode(), ShieldMode.DISABLED)
+        with self.assertRaises(RuntimeError):
+            _auto_detect_mode()
 
     @unittest.mock.patch(
         "shutil.which", side_effect=lambda n: "/usr/sbin/nft" if n == "nft" else None
@@ -341,7 +342,7 @@ class TestGatePortValidation(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.yml"
-            config_file.write_text("gate_port: true\n")
+            config_file.write_text("mode: standard\ngate_port: true\n")
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
                 self.assertEqual(cfg.gate_port, 9418)
@@ -353,7 +354,7 @@ class TestGatePortValidation(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.yml"
-            config_file.write_text("gate_port: 99999\n")
+            config_file.write_text("mode: standard\ngate_port: 99999\n")
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
                 self.assertEqual(cfg.gate_port, 9418)
@@ -365,7 +366,7 @@ class TestGatePortValidation(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             config_file = Path(tmp) / "config.yml"
-            config_file.write_text("gate_port: 0\n")
+            config_file.write_text("mode: standard\ngate_port: 0\n")
             with unittest.mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": tmp}):
                 cfg = load_shield_config()
                 self.assertEqual(cfg.gate_port, 9418)

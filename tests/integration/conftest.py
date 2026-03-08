@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -112,6 +113,40 @@ def container_pid(container: str) -> str:
     from terok_shield.run import podman_inspect
 
     return podman_inspect(container, "{{.State.Pid}}")
+
+
+@pytest.fixture
+def probe_container(_pull_image: None) -> Iterator[str]:
+    """Start an Alpine container with Python and shield_probe installed."""
+    name = f"{CTR_PREFIX}-probe-{os.getpid()}"
+    subprocess.run(["podman", "rm", "-f", name], capture_output=True)
+    try:
+        subprocess.run(
+            ["podman", "run", "-d", "--name", name, IMAGE, "sleep", "120"],
+            check=True,
+            capture_output=True,
+        )
+        # Install Python inside the container.
+        subprocess.run(
+            ["podman", "exec", name, "apk", "add", "--no-cache", "python3"],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        # Copy the probe script into the container.
+        probe_src = Path(__file__).resolve().parent.parent.parent / (
+            "src/terok_shield/resources/shield_probe.py"
+        )
+        if not probe_src.exists():
+            pytest.skip(f"shield_probe.py not found at {probe_src}")
+        subprocess.run(
+            ["podman", "cp", str(probe_src), f"{name}:/usr/local/bin/shield_probe.py"],
+            check=True,
+            capture_output=True,
+        )
+        yield name
+    finally:
+        subprocess.run(["podman", "rm", "-f", name], capture_output=True)
 
 
 def nsenter_nft(pid: str, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess:

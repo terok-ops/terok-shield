@@ -3,27 +3,23 @@
 
 """DNS domain resolution with timestamp-based caching."""
 
-import ipaddress
+import logging
 import re
 import time
 from pathlib import Path
 
 from .config import shield_resolved_dir
 from .run import dig
+from .util import is_ipv4
+
+logger = logging.getLogger(__name__)
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _is_ip(entry: str) -> bool:
     """Return True if `entry` is an IPv4 address or CIDR, False if it's a domain."""
-    try:
-        if "/" in entry:
-            ipaddress.IPv4Network(entry, strict=False)
-        else:
-            ipaddress.IPv4Address(entry)
-        return True
-    except ValueError:
-        return False
+    return is_ipv4(entry)
 
 
 def _split_entries(entries: list[str]) -> tuple[list[str], list[str]]:
@@ -43,7 +39,10 @@ def resolve_domains(domains: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for domain in domains:
-        for ip in dig(domain):
+        ips = dig(domain)
+        if not ips:
+            logger.warning("Domain %r resolved to no IPs (typo or DNS failure?)", domain)
+        for ip in ips:
             if ip not in seen:
                 seen.add(ip)
                 result.append(ip)

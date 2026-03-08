@@ -63,7 +63,7 @@ jobs:
         run: pip install -r .github/requirements-ci.txt
 
       - name: Check for dead code
-        run: vulture src/terok_shield/ vulture_whitelist.py --min-confidence 80
+        run: vulture src/terok_shield/ --min-confidence 80
 
   tach:
     if: github.repository == 'terok-ops/terok-shield'

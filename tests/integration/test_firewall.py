@@ -26,6 +26,7 @@ from ..testnet import (
     ALLOWED_TARGET_HTTPS,
     ALLOWED_TARGET_IPS,
     BLOCKED_TARGET_HTTP,
+    BLOCKED_TARGET_IP,
     GOOGLE_DNS_IP,
     IPV6_CLOUDFLARE,
     IPV6_GOOGLE,
@@ -47,21 +48,11 @@ def _exec(container: str, *cmd: str, timeout: int = 10) -> subprocess.CompletedP
     )
 
 
-def _wget(
-    container: str, url: str, timeout: int = 5, *, ipv4_only: bool = True
-) -> subprocess.CompletedProcess:
+def _wget(container: str, url: str, timeout: int = 5) -> subprocess.CompletedProcess:
     """Attempt an outbound HTTP/HTTPS request from inside a container."""
-    flags = ["-q", "--spider", f"--timeout={timeout}"]
-    if ipv4_only:
-        flags.insert(0, "-4")
-    return _exec(container, "wget", *flags, url, timeout=timeout + 5)
-
-
-def _check_internet(container: str) -> None:
-    """Skip test if container has no internet connectivity."""
-    pre = _wget(container, ALLOWED_TARGET_HTTP)
-    if pre.returncode != 0:
-        pytest.skip("No internet connectivity from container")
+    return _exec(
+        container, "wget", "-q", "--spider", f"--timeout={timeout}", url, timeout=timeout + 5
+    )
 
 
 # ── Firewall enforcement: blocking ──────────────────────
@@ -76,7 +67,7 @@ class TestFirewallBlocking:
 
     def test_http_blocked_after_ruleset(self, container: str, container_pid: str) -> None:
         """Outbound HTTP to an external IP is rejected after applying the ruleset."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
 
@@ -85,7 +76,7 @@ class TestFirewallBlocking:
 
     def test_https_blocked_after_ruleset(self, container: str, container_pid: str) -> None:
         """Outbound HTTPS is rejected after applying the ruleset."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
 
@@ -124,22 +115,32 @@ class TestFirewallBlocking:
         assert ping_g.returncode != 0, "IPv6 ping to Google should be blocked"
 
         # Functional: HTTP over IPv6 literal (must not force IPv4)
-        http6 = _wget(container, IPV6_HTTP_URL, timeout=5, ipv4_only=False)
+        http6 = _wget(container, IPV6_HTTP_URL, timeout=5)
         assert http6.returncode != 0, "HTTP over IPv6 should be blocked"
 
-    def test_reject_returns_icmp_error(self, container: str, container_pid: str) -> None:
-        """Blocked traffic receives ICMP admin-prohibited (reject, not drop/timeout)."""
-        _check_internet(container)
+    def test_reject_is_fast_not_timeout(self, container: str, container_pid: str) -> None:
+        """Blocked traffic fails fast (reject), not via silent timeout (drop).
+
+        A ``reject`` rule sends an ICMP error back immediately, so the
+        connection fails in well under the timeout.  A ``drop`` rule
+        would silently discard packets, causing the client to hang until
+        the full timeout expires.  We verify reject behavior by measuring
+        elapsed time rather than parsing tool-specific error messages.
+        """
+        import time
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
 
-        # wget to a blocked target with short timeout — stderr should show reject
-        post = _wget(container, BLOCKED_TARGET_HTTP, timeout=5)
-        assert post.returncode != 0
-        stderr_lower = post.stderr.lower()
-        reject_phrases = ("network unreachable", "prohibited", "refused", "network error")
-        assert any(phrase in stderr_lower for phrase in reject_phrases), (
-            f"Expected ICMP reject indication in stderr, got: {post.stderr!r}"
+        wget_timeout = 10
+        t0 = time.monotonic()
+        post = _wget(container, BLOCKED_TARGET_HTTP, timeout=wget_timeout)
+        elapsed = time.monotonic() - t0
+
+        assert post.returncode != 0, "Blocked target should be rejected"
+        assert elapsed < wget_timeout / 2, (
+            f"Connection took {elapsed:.1f}s (timeout={wget_timeout}s) — "
+            f"looks like drop (silent timeout), not reject (ICMP error)"
         )
 
     def test_rfc1918_still_blocked_when_not_whitelisted(
@@ -170,6 +171,48 @@ class TestFirewallBlocking:
         assert allow_pos < rfc_pos, "Allow set must precede RFC1918 reject rules"
 
 
+# ── ICMP error detection via shield_probe ─────────────
+
+
+@pytest.mark.integration
+@podman_missing
+@nft_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestShieldProbe:
+    """Verify shield_probe detects the exact ICMP admin-prohibited code."""
+
+    def _run_probe(self, container: str, host: str, port: int = 443, timeout: int = 15) -> dict:
+        """Run shield_probe.py inside the container and return parsed JSON."""
+        r = _exec(
+            container, "python3", "/usr/local/bin/shield_probe.py", host, str(port), timeout=timeout
+        )
+        assert r.returncode == 0, f"shield_probe failed: {r.stderr}"
+        return json.loads(r.stdout)
+
+    def test_admin_prohibited_detected(self, probe_container: str) -> None:
+        """Blocked traffic reports ICMP type 3, code 13 (admin-prohibited)."""
+        # Apply the standard-mode firewall.
+        pid = subprocess.run(
+            ["podman", "inspect", "--format", "{{.State.Pid}}", probe_container],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        r = nsenter_nft(pid, stdin=standard_ruleset())
+        assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
+
+        result = self._run_probe(probe_container, BLOCKED_TARGET_IP)
+        assert result["result"] == "icmp-error", f"Expected icmp-error, got: {result}"
+        assert result["icmp_type"] == 3, f"Expected ICMP type 3, got: {result}"
+        assert result["icmp_code"] == 13, f"Expected ICMP code 13, got: {result}"
+        assert result["icmp_code_name"] == "admin-prohibited"
+
+    def test_allowed_ip_is_open(self, probe_container: str) -> None:
+        """Without a firewall, probe reports open/timeout (not icmp-error)."""
+        result = self._run_probe(probe_container, ALLOWED_TARGET_IPS[0], port=53)
+        assert result["result"] != "icmp-error", f"Unexpected ICMP error: {result}"
+
+
 # ── Firewall enforcement: allowing ──────────────────────
 
 
@@ -182,7 +225,7 @@ class TestFirewallAllowing:
 
     def test_allowed_ip_reachable_http(self, container: str, container_pid: str) -> None:
         """HTTP traffic to an allowed IP is permitted."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -193,7 +236,7 @@ class TestFirewallAllowing:
 
     def test_allowed_ip_reachable_https(self, container: str, container_pid: str) -> None:
         """HTTPS traffic to an allowed IP is permitted."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -204,7 +247,7 @@ class TestFirewallAllowing:
 
     def test_non_allowed_ip_still_blocked(self, container: str, container_pid: str) -> None:
         """IPs not in the allow set remain blocked after adding others."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -215,7 +258,7 @@ class TestFirewallAllowing:
 
     def test_allow_then_block_different_targets(self, container: str, container_pid: str) -> None:
         """One IP allowed, another blocked — in the same container."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -309,7 +352,6 @@ class TestApplyHookE2E:
         self, container: str, container_pid: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """After apply_hook, outbound traffic is blocked."""
-        _check_internet(container)
 
         with tempfile.TemporaryDirectory() as tmp:
             monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
@@ -322,7 +364,6 @@ class TestApplyHookE2E:
         self, container: str, container_pid: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """After apply_hook with pre-resolved IPs, those IPs are reachable."""
-        _check_internet(container)
 
         with tempfile.TemporaryDirectory() as tmp:
             monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
@@ -485,7 +526,6 @@ class TestHookMainE2E:
         self, container: str, container_pid: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Full lifecycle: OCI state → hook_main → traffic filtered."""
-        _check_internet(container)
 
         with tempfile.TemporaryDirectory() as tmp:
             monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)

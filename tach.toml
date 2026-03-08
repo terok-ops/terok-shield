@@ -30,6 +30,11 @@ depends_on = [
     "terok_shield.nft_constants",
 ]
 
+# Shared utilities — standalone, no internal deps
+[[modules]]
+path = "terok_shield.util"
+depends_on = []
+
 # Subprocess helpers — standalone, no internal deps
 [[modules]]
 path = "terok_shield.run"
@@ -47,12 +52,13 @@ depends_on = [
     "terok_shield.config",
 ]
 
-# DNS resolution and caching — depends on config + run
+# DNS resolution and caching — depends on config + run + util
 [[modules]]
 path = "terok_shield.dns"
 depends_on = [
     "terok_shield.config",
     "terok_shield.run",
+    "terok_shield.util",
 ]
 
 # Profile loading — depends on config
@@ -72,16 +78,47 @@ depends_on = [
     "terok_shield.run",
 ]
 
-# CLI — depends on config and package root
+# Standard mode — OCI hooks, per-container netns
+[[modules]]
+path = "terok_shield.standard"
+depends_on = [
+    "terok_shield.config",
+    "terok_shield.dns",
+    "terok_shield.nft",
+    "terok_shield.profiles",
+    "terok_shield.run",
+]
+
+# Hardened mode — bridge network, rootless-netns
+[[modules]]
+path = "terok_shield.hardened"
+depends_on = [
+    "terok_shield.config",
+    "terok_shield.dns",
+    "terok_shield.nft",
+    "terok_shield.nft_constants",
+    "terok_shield.profiles",
+    "terok_shield.run",
+    "terok_shield.util",
+]
+
+# CLI — depends on package root (public API)
 [[modules]]
 path = "terok_shield.cli"
 depends_on = [
     "terok_shield",
 ]
 
-# Package root — depends on config for public API re-exports
+# Package root — public API, dispatches to mode modules
 [[modules]]
 path = "terok_shield"
 depends_on = [
+    "terok_shield.audit",
     "terok_shield.config",
+    "terok_shield.dns",
+    "terok_shield.hardened",
+    "terok_shield.profiles",
+    "terok_shield.run",
+    "terok_shield.standard",
+    "terok_shield.util",
 ]
