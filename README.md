@@ -34,7 +34,7 @@ pip install terok-shield
 Or from a GitHub release wheel:
 
 ```bash
-pip install https://github.com/terok-ops/terok-shield/releases/download/v0.1.0/terok_shield-0.1.0-py3-none-any.whl
+pip install https://github.com/terok-ai/terok-shield/releases/download/v0.1.0/terok_shield-0.1.0-py3-none-any.whl
 ```
 
 ## Quick start
@@ -52,7 +52,7 @@ terok-shield resolve --force
 
 ## Usage with terok
 
-terok-shield is a hard dependency of [terok](https://github.com/terok-ops/terok).
+terok-shield is a hard dependency of [terok](https://github.com/terok-ai/terok).
 When installed alongside terok, the `terokctl shield` commands delegate to
 terok-shield's library API.
 

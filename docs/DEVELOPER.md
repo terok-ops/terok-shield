@@ -3,7 +3,7 @@
 ## Development setup
 
 ```bash
-git clone git@github.com:terok-ops/terok-shield.git
+git clone git@github.com:terok-ai/terok-shield.git
 cd terok-shield
 make install-dev
 ```
@@ -67,7 +67,7 @@ and **make outbound connections to the public internet**. They require:
 
 The following external IPs, domains, and URLs are contacted during test runs.
 This list is auto-generated from
-[`tests/testnet.py`](https://github.com/terok-ops/terok-shield/blob/master/tests/testnet.py):
+[`tests/testnet.py`](https://github.com/terok-ai/terok-shield/blob/master/tests/testnet.py):
 
 ```python
 --8<-- "tests/testnet.py:outbound-targets"

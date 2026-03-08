@@ -89,7 +89,7 @@ allow sets and RFC1918 rules are IPv4-only — without the explicit drop, IPv6
 established connections could bypass filtering via `ct state established,related`.
 
 IPv6 allowlisting support is planned for a future release
-([#16](https://github.com/terok-ops/terok-shield/issues/16)).
+([#16](https://github.com/terok-ai/terok-shield/issues/16)).
 
 ## Fail-closed guarantees
 

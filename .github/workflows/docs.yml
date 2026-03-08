@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'terok-ops/terok-shield'
+    if: github.repository == 'terok-ai/terok-shield'
     runs-on: ubuntu-latest
     permissions:
       contents: read

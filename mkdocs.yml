@@ -1,8 +1,8 @@
 site_name: terok-shield
 site_description: nftables-based egress firewalling for Podman containers
-site_url: https://terok-ops.github.io/terok-shield
-repo_url: https://github.com/terok-ops/terok-shield
-repo_name: terok-ops/terok-shield
+site_url: https://terok-ai.github.io/terok-shield
+repo_url: https://github.com/terok-ai/terok-shield
+repo_name: terok-ai/terok-shield
 
 theme:
   name: material
@@ -87,7 +87,7 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/terok-ops/terok-shield
+      link: https://github.com/terok-ai/terok-shield
 
 extra_css:
   - https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap
