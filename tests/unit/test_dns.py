@@ -79,6 +79,22 @@ class TestResolveDomains(unittest.TestCase):
         self.assertEqual(result, [TEST_IP1])
 
     @unittest.mock.patch("terok_shield.dns.dig")
+    def test_logs_warning_for_unresolvable(self, mock_dig: unittest.mock.Mock) -> None:
+        """Log warning when a domain resolves to no IPs."""
+        mock_dig.side_effect = [[TEST_IP1], []]
+        with self.assertLogs("terok_shield.dns", level="WARNING") as cm:
+            resolve_domains(["good.com", "bad.com"])
+        self.assertEqual(len(cm.output), 1)
+        self.assertIn("bad.com", cm.output[0])
+
+    @unittest.mock.patch("terok_shield.dns.dig")
+    def test_no_warning_when_all_resolve(self, mock_dig: unittest.mock.Mock) -> None:
+        """No warning when all domains resolve successfully."""
+        mock_dig.side_effect = [[TEST_IP1], [TEST_IP2]]
+        with self.assertNoLogs("terok_shield.dns", level="WARNING"):
+            resolve_domains(["good.com", "also-good.com"])
+
+    @unittest.mock.patch("terok_shield.dns.dig")
     def test_empty_input(self, mock_dig: unittest.mock.Mock) -> None:
         """Empty domain list returns empty result."""
         result = resolve_domains([])

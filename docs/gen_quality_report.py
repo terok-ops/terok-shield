@@ -232,7 +232,6 @@ def _section_dead_code() -> str:
         "-m",
         "vulture",
         str(SRC),
-        str(ROOT / "vulture_whitelist.py"),
         "--min-confidence",
         "80",
     )

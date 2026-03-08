@@ -24,7 +24,6 @@ ANNOTATION_KEY = "terok.shield.profiles"
 class ShieldMode(enum.Enum):
     """Operating mode for the shield firewall."""
 
-    DISABLED = "disabled"
     STANDARD = "standard"
     HARDENED = "hardened"
 
@@ -33,7 +32,7 @@ class ShieldMode(enum.Enum):
 class ShieldConfig:
     """Resolved shield configuration."""
 
-    mode: ShieldMode = ShieldMode.DISABLED
+    mode: ShieldMode = ShieldMode.STANDARD
     default_profiles: tuple[str, ...] = ("dev-standard",)
     gate_port: int = DEFAULT_GATE_PORT
     audit_enabled: bool = True
@@ -141,14 +140,14 @@ def load_shield_config() -> ShieldConfig:
     if not isinstance(section, dict):
         return ShieldConfig()
 
-    mode_str = section.get("mode", "disabled")
-    try:
-        mode = ShieldMode(mode_str)
-    except ValueError:
-        if mode_str == "auto":
-            mode = _auto_detect_mode()
-        else:
-            mode = ShieldMode.DISABLED
+    mode_str = section.get("mode", "auto")
+    if mode_str == "auto":
+        mode = _auto_detect_mode()
+    else:
+        try:
+            mode = ShieldMode(mode_str)
+        except ValueError:
+            raise ValueError(f"Unknown shield mode: {mode_str!r}") from None
 
     raw_profiles = section.get("default_profiles", ["dev-standard"])
     if not isinstance(raw_profiles, list):
@@ -188,7 +187,10 @@ def _auto_detect_mode() -> ShieldMode:
     """Auto-detect the best available shield mode.
 
     Checks for hardened mode prerequisites (podman bridge network + dnsmasq),
-    falls back to standard mode (nft binary), or returns disabled.
+    falls back to standard mode (nft binary).
+
+    Raises:
+        RuntimeError: If no supported shield mode is available.
     """
     import shutil
     import subprocess
@@ -209,4 +211,7 @@ def _auto_detect_mode() -> ShieldMode:
     if shutil.which("nft"):
         return ShieldMode.STANDARD
 
-    return ShieldMode.DISABLED
+    raise RuntimeError(
+        "No supported shield mode available. "
+        "Install nft (standard mode) or set up a podman bridge network with dnsmasq (hardened mode)."
+    )

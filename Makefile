@@ -39,7 +39,7 @@ complexity:
 
 # Find dead code (cross-file, min 80% confidence)
 deadcode:
-	poetry run vulture src/terok_shield/ vulture_whitelist.py --min-confidence 80
+	poetry run vulture src/terok_shield/ --min-confidence 80
 
 # Check REUSE (SPDX license/copyright) compliance
 reuse:
