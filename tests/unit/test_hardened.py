@@ -15,6 +15,7 @@ from terok_shield.config import (
 )
 from terok_shield.hardened import (
     _read_resolved_cache,
+    _safe_domain,
     allow_ip,
     deny_ip,
     list_rules,
@@ -64,7 +65,7 @@ class TestPreStart(unittest.TestCase):
     @mock.patch("terok_shield.hardened.nft_via_rootless_netns")
     def test_returns_bridge_args(self, mock_nft, _compose, _resolve):
         """Pre-start returns bridge network args."""
-        mock_nft.return_value = "table inet terok_shield {}"
+        mock_nft.return_value = "table inet terok_shield { th dport 9418 }"
         args = pre_start(self._config(), "test", ["dev-hardened"])
 
         self.assertIn("--network", args)
@@ -76,7 +77,7 @@ class TestPreStart(unittest.TestCase):
     @mock.patch("terok_shield.hardened.nft_via_rootless_netns")
     def test_includes_dns_and_security(self, mock_nft, _compose, _resolve):
         """Pre-start includes DNS, cap-drop, and no-new-privileges args."""
-        mock_nft.return_value = "table inet terok_shield {}"
+        mock_nft.return_value = "table inet terok_shield { th dport 9418 }"
         args = pre_start(self._config(), "test", ["dev-hardened"])
 
         self.assertIn("--dns", args)
@@ -92,7 +93,7 @@ class TestPreStart(unittest.TestCase):
     @mock.patch("terok_shield.hardened.nft_via_rootless_netns")
     def test_skips_resolve_on_empty_profiles(self, mock_nft, _compose, mock_resolve):
         """Pre-start does not call resolve_and_cache for empty profile entries."""
-        mock_nft.return_value = "table inet terok_shield {}"
+        mock_nft.return_value = "table inet terok_shield { th dport 9418 }"
         pre_start(self._config(), "test", [])
         mock_resolve.assert_not_called()
 
@@ -101,15 +102,31 @@ class TestPreStart(unittest.TestCase):
     @mock.patch("terok_shield.hardened.nft_via_rootless_netns")
     def test_ensure_netns_loads_table(self, mock_nft, _compose, _resolve):
         """Pre-start creates table if not already present."""
-        # First call: list table -> not found. Second call: load ruleset. Third: verify.
+        # First: list ruleset -> empty. Second: load. Third: verify.
         mock_nft.side_effect = [
             "",
             "",
             "table inet terok_shield {}",
         ]
         pre_start(self._config(), "test", ["dev-hardened"])
-        # Three nft calls: list, load, verify
         self.assertEqual(mock_nft.call_count, 3)
+
+    @mock.patch("terok_shield.hardened.resolve_and_cache")
+    @mock.patch("terok_shield.hardened.compose_profiles", return_value=["github.com"])
+    @mock.patch("terok_shield.hardened.nft_via_rootless_netns")
+    def test_ensure_netns_reloads_on_port_change(self, mock_nft, _compose, _resolve):
+        """Pre-start reloads table when gate port has changed."""
+        # First: list ruleset -> table exists with old port.
+        # Second: delete old table. Third: load new. Fourth: verify.
+        mock_nft.side_effect = [
+            "table inet terok_shield { th dport 9999 }",
+            "",
+            "",
+            "table inet terok_shield {}",
+        ]
+        pre_start(self._config(gate_port=1234), "test", ["dev-hardened"])
+        # 4 nft calls: list, delete, load, verify
+        self.assertEqual(mock_nft.call_count, 4)
 
     @mock.patch("terok_shield.hardened.resolve_and_cache")
     @mock.patch("terok_shield.hardened.compose_profiles", return_value=["github.com"])
@@ -156,20 +173,33 @@ class TestPostStart(unittest.TestCase):
 class TestPreStop(unittest.TestCase):
     """Test hardened mode pre_stop."""
 
+    @mock.patch("terok_shield.hardened.shield_resolved_dir")
     @mock.patch("terok_shield.hardened.nft_via_rootless_netns")
-    def test_removes_rules_and_set(self, mock_nft):
-        """Pre-stop deletes forward rules and allow set."""
-        mock_nft.return_value = '  meta nftrace set 1 comment "terok_shield:test" # handle 5\n'
-        pre_stop("test")
-        # 1 list chain + 1 delete rule + 1 delete set = 3 calls
+    def test_removes_rules_and_set(self, mock_nft, mock_dir):
+        """Pre-stop deletes forward rules, allow set, and dnsmasq file."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            mock_dir.return_value = Path(td)
+            dnsmasq_file = Path(td) / "test.dnsmasq-nftset"
+            dnsmasq_file.write_text("nftset=/example.com/4#inet#terok_shield#test_allow_v4\n")
+            mock_nft.return_value = '  meta nftrace set 1 comment "terok_shield:test" # handle 5\n'
+            pre_stop("test")
+            self.assertFalse(dnsmasq_file.exists())
+        # 1 list chain + 1 delete rule + 1 delete set = 3 nft calls
         self.assertGreaterEqual(mock_nft.call_count, 3)
 
+    @mock.patch("terok_shield.hardened.shield_resolved_dir")
     @mock.patch("terok_shield.hardened.nft_via_rootless_netns")
-    def test_no_rules_to_remove(self, mock_nft):
-        """Pre-stop handles missing rules gracefully."""
-        mock_nft.return_value = ""
-        pre_stop("test")
-        # 1 list chain + 1 delete set = 2 calls
+    def test_no_rules_to_remove(self, mock_nft, mock_dir):
+        """Pre-stop handles missing rules and missing dnsmasq file gracefully."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            mock_dir.return_value = Path(td)
+            mock_nft.return_value = ""
+            pre_stop("test")
+        # 1 list chain + 1 delete set = 2 nft calls
         self.assertEqual(mock_nft.call_count, 2)
 
 
@@ -246,3 +276,34 @@ class TestReadResolvedCache(unittest.TestCase):
         """Returns empty list for container names that fail validation."""
         result = _read_resolved_cache("../escape")
         self.assertEqual(result, [])
+
+
+class TestSafeDomain(unittest.TestCase):
+    """Test _safe_domain validation."""
+
+    def test_valid_domain(self):
+        """Accepts valid domain names."""
+        self.assertTrue(_safe_domain("github.com"))
+        self.assertTrue(_safe_domain("sub.example.co.uk"))
+        self.assertTrue(_safe_domain("example.com."))
+
+    def test_rejects_slash(self):
+        """Rejects domains containing slashes."""
+        self.assertFalse(_safe_domain("evil/domain"))
+
+    def test_rejects_hash(self):
+        """Rejects domains containing hash."""
+        self.assertFalse(_safe_domain("evil#domain"))
+
+    def test_rejects_whitespace(self):
+        """Rejects domains containing whitespace."""
+        self.assertFalse(_safe_domain("evil domain"))
+        self.assertFalse(_safe_domain("evil\tdomain"))
+
+    def test_rejects_newline(self):
+        """Rejects domains containing newlines."""
+        self.assertFalse(_safe_domain("evil\ndomain"))
+
+    def test_rejects_empty(self):
+        """Rejects empty strings."""
+        self.assertFalse(_safe_domain(""))

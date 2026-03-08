@@ -34,6 +34,7 @@ from .profiles import compose_profiles
 from .run import ExecError, nft_via_rootless_netns, podman_inspect, run as run_cmd
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SAFE_DOMAIN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.?$")
 
 
 def setup(_config: ShieldConfig) -> None:
@@ -57,7 +58,9 @@ def setup(_config: ShieldConfig) -> None:
 
 
 def _ensure_netns(gate_port: int) -> None:
-    """Ensure rootless-netns has the shield nft table (idempotent).
+    """Ensure rootless-netns has the shield nft table with current gate_port.
+
+    If the table exists but uses a different gate port, it is replaced.
 
     Args:
         gate_port: Gate server port for the ruleset.
@@ -65,19 +68,27 @@ def _ensure_netns(gate_port: int) -> None:
     Raises:
         RuntimeError: If the table cannot be loaded.
     """
+    expected = hardened_ruleset(BRIDGE_GATEWAY, BRIDGE_SUBNET, gate_port)
+
     out = nft_via_rootless_netns(
         "list",
-        "table",
+        "ruleset",
         "inet",
-        "terok_shield",
         check=False,
     )
     if "terok_shield" in out:
-        return
+        if f"th dport {gate_port}" in out:
+            return
+        # Gate port changed — delete stale table before reloading.
+        nft_via_rootless_netns(
+            "delete",
+            "table",
+            "inet",
+            "terok_shield",
+            check=False,
+        )
 
-    nft_via_rootless_netns(
-        stdin=hardened_ruleset(BRIDGE_GATEWAY, BRIDGE_SUBNET, gate_port),
-    )
+    nft_via_rootless_netns(stdin=expected)
 
     out = nft_via_rootless_netns(
         "list",
@@ -224,6 +235,8 @@ def pre_stop(container: str) -> None:
         check=False,
     )
 
+    (shield_resolved_dir() / f"{safe}.dnsmasq-nftset").unlink(missing_ok=True)
+
 
 def allow_ip(container: str, ip: str) -> None:
     """Live-allow an IP for a running container in rootless-netns.
@@ -295,8 +308,15 @@ def _is_ip_entry(entry: str) -> bool:
         return False
 
 
+def _safe_domain(domain: str) -> bool:
+    """Return True if domain is safe for use in dnsmasq nftset directives."""
+    return bool(_SAFE_DOMAIN.fullmatch(domain)) and len(domain) <= 253
+
+
 def _update_dnsmasq_nftsets(container: str, domains: list[str]) -> None:
     """Write dnsmasq nftset config for a container (best-effort).
+
+    Domains that fail validation are silently skipped.
 
     Args:
         container: Container name.
@@ -305,6 +325,9 @@ def _update_dnsmasq_nftsets(container: str, domains: list[str]) -> None:
     if not domains:
         return
     safe = safe_name(container)
-    lines = [f"nftset=/{d}/4#inet#{NFT_TABLE_NAME}#{safe}_allow_v4" for d in domains]
+    valid = [d for d in domains if _safe_domain(d)]
+    if not valid:
+        return
+    lines = [f"nftset=/{d}/4#inet#{NFT_TABLE_NAME}#{safe}_allow_v4" for d in valid]
     nftset_file = shield_resolved_dir() / f"{safe}.dnsmasq-nftset"
     nftset_file.write_text("\n".join(lines) + "\n")
