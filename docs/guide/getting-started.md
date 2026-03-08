@@ -103,10 +103,9 @@ Breaking this down:
 5. If any step fails, the container is torn down (fail-closed)
 
 From inside the container, only the allowed destinations are reachable.
-All other outbound traffic is dropped. RFC1918 addresses (private networks)
-are rejected by default to prevent lateral movement. They can be explicitly
-whitelisted in profiles when needed for local infrastructure — doing so
-generates a special notice in the audit logs.
+All other outbound traffic is dropped. Whitelisting RFC1918 addresses
+(private networks) or large CIDRs generates a special notice in the audit
+log.
 
 ## Allow or deny destinations at runtime
 

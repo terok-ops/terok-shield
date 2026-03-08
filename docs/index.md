@@ -12,7 +12,7 @@ destinations — everything else is rejected with an ICMP error.
 
 - **Default-deny egress** — containers start with no outbound access
 - **DNS-based allowlisting** — allowed destinations specified as domain names, resolved and cached automatically
-- **RFC1918 blocking** — private networks and link-local addresses rejected by default (with opt-in whitelisting for local infrastructure)
+- **RFC1918 awareness** — whitelisting private network or link-local addresses generates a notice in the audit log
 - **IPv6 dropped** — all IPv6 traffic unconditionally dropped (IPv4-only allow sets)
 - **Fail-closed** — if the firewall hook fails, the container is torn down
 - **Audit logging** — JSON-lines lifecycle logs + kernel-level per-packet nftables logs

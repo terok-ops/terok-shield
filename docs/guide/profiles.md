@@ -37,9 +37,7 @@ cdn.example.com
 
 !!! note "RFC1918 addresses in profiles"
     Private network addresses like `10.0.0.5/32` are valid in profiles.
-    They are rejected by default, but adding them to a profile whitelists
-    them — a special notice is logged in the audit log when this happens.
-    This is useful for allowing access to local infrastructure.
+    Whitelisting them generates a special notice in the audit log.
 
 ## Custom profiles
 
