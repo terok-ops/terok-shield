@@ -57,13 +57,6 @@ def _wget(
     return _exec(container, "wget", *flags, url, timeout=timeout + 5)
 
 
-def _check_internet(container: str) -> None:
-    """Skip test if container has no internet connectivity."""
-    pre = _wget(container, ALLOWED_TARGET_HTTP)
-    if pre.returncode != 0:
-        pytest.skip("No internet connectivity from container")
-
-
 # ── Firewall enforcement: blocking ──────────────────────
 
 
@@ -76,7 +69,7 @@ class TestFirewallBlocking:
 
     def test_http_blocked_after_ruleset(self, container: str, container_pid: str) -> None:
         """Outbound HTTP to an external IP is rejected after applying the ruleset."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
 
@@ -85,7 +78,7 @@ class TestFirewallBlocking:
 
     def test_https_blocked_after_ruleset(self, container: str, container_pid: str) -> None:
         """Outbound HTTPS is rejected after applying the ruleset."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
 
@@ -129,7 +122,7 @@ class TestFirewallBlocking:
 
     def test_reject_returns_icmp_error(self, container: str, container_pid: str) -> None:
         """Blocked traffic receives ICMP admin-prohibited (reject, not drop/timeout)."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
 
@@ -182,7 +175,7 @@ class TestFirewallAllowing:
 
     def test_allowed_ip_reachable_http(self, container: str, container_pid: str) -> None:
         """HTTP traffic to an allowed IP is permitted."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -193,7 +186,7 @@ class TestFirewallAllowing:
 
     def test_allowed_ip_reachable_https(self, container: str, container_pid: str) -> None:
         """HTTPS traffic to an allowed IP is permitted."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -204,7 +197,7 @@ class TestFirewallAllowing:
 
     def test_non_allowed_ip_still_blocked(self, container: str, container_pid: str) -> None:
         """IPs not in the allow set remain blocked after adding others."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -215,7 +208,7 @@ class TestFirewallAllowing:
 
     def test_allow_then_block_different_targets(self, container: str, container_pid: str) -> None:
         """One IP allowed, another blocked — in the same container."""
-        _check_internet(container)
+
         r = nsenter_nft(container_pid, stdin=standard_ruleset())
         assert r.returncode == 0, f"Ruleset apply failed: {r.stderr}"
         r = nsenter_nft(container_pid, stdin=add_elements("allow_v4", ALLOWED_TARGET_IPS))
@@ -309,7 +302,6 @@ class TestApplyHookE2E:
         self, container: str, container_pid: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """After apply_hook, outbound traffic is blocked."""
-        _check_internet(container)
 
         with tempfile.TemporaryDirectory() as tmp:
             monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
@@ -322,7 +314,6 @@ class TestApplyHookE2E:
         self, container: str, container_pid: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """After apply_hook with pre-resolved IPs, those IPs are reachable."""
-        _check_internet(container)
 
         with tempfile.TemporaryDirectory() as tmp:
             monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
@@ -485,7 +476,6 @@ class TestHookMainE2E:
         self, container: str, container_pid: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Full lifecycle: OCI state → hook_main → traffic filtered."""
-        _check_internet(container)
 
         with tempfile.TemporaryDirectory() as tmp:
             monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
