@@ -42,6 +42,12 @@ def _image_available() -> bool:
 # ── Skip conditions ─────────────────────────────────────
 # Cheap binary-existence checks only.  The real nft capability check
 # is the session-scoped `nft_in_netns` fixture (needs a running container).
+#
+# These `skipif` markers complement the `@pytest.mark.needs_podman` /
+# `needs_internet` custom markers defined in pyproject.toml.  The custom
+# markers are for **test selection** (`pytest -m needs_podman`), while
+# `podman_missing` / `nft_missing` are **skip guards** that gracefully
+# degrade when binaries are absent.  Both are needed on each test class.
 
 podman_missing = pytest.mark.skipif(not _has("podman"), reason="podman not installed")
 nft_missing = pytest.mark.skipif(not _has("nft"), reason="nft not installed")
