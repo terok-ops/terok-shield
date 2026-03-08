@@ -117,8 +117,8 @@ class TestFirewallBlocking:
         http6 = _wget(container, IPV6_HTTP_URL, timeout=5)
         assert http6.returncode != 0, "HTTP over IPv6 should be blocked"
 
-    def test_reject_returns_icmp_error(self, container: str, container_pid: str) -> None:
-        """Blocked traffic receives ICMP reject (fast failure, not drop/timeout).
+    def test_reject_is_fast_not_timeout(self, container: str, container_pid: str) -> None:
+        """Blocked traffic fails fast (reject), not via silent timeout (drop).
 
         A ``reject`` rule sends an ICMP error back immediately, so the
         connection fails in well under the timeout.  A ``drop`` rule
