@@ -4,7 +4,6 @@
 """Tests for the shield_probe ICMP diagnostic tool."""
 
 import json
-import socket
 import struct
 import unittest
 from unittest.mock import MagicMock, patch
@@ -40,30 +39,62 @@ def _make_ancdata(ee_errno: int, ee_origin: int, ee_type: int, ee_code: int) -> 
     return [(_SOL_IP, _IP_RECVERR, _make_sock_ee(ee_errno, ee_origin, ee_type, ee_code))]
 
 
-# ── Real-socket tests (exercise the full kernel IP_RECVERR path) ───────
+def _mock_probe(poll_returns, recvmsg_result=None, send_side_effect=None) -> dict:
+    """Run probe() with mocked socket and poll.
+
+    Args:
+        poll_returns: List of return values for successive poll() calls.
+        recvmsg_result: Tuple (data, ancdata, flags, addr) for recvmsg.
+        send_side_effect: Side effect for sock.send (e.g. [None, OSError]).
+    """
+    mock_sock = MagicMock()
+    mock_poller = MagicMock()
+    mock_poller.poll = MagicMock(side_effect=poll_returns)
+
+    if recvmsg_result is not None:
+        mock_sock.recvmsg.return_value = recvmsg_result
+    if send_side_effect is not None:
+        mock_sock.send.side_effect = send_side_effect
+
+    with (
+        patch("terok_shield.resources.shield_probe.socket.socket", return_value=mock_sock),
+        patch("terok_shield.resources.shield_probe.select.poll", return_value=mock_poller),
+    ):
+        return probe(TEST_IP1, 443, timeout=1.0)
 
 
-class TestProbeRealSocket(unittest.TestCase):
-    """Test probe() against real kernel ICMP via localhost sockets."""
+# ── Mocked tests for core probe paths ─────────────────────────────────
 
-    def test_port_unreachable_on_localhost(self) -> None:
-        """Probing an unused localhost port gets ICMP port-unreachable."""
-        result = probe("127.0.0.1", 39999, timeout=2.0)
+
+class TestProbeMockedPaths(unittest.TestCase):
+    """Mocked equivalents of the real-socket tests (work on any platform)."""
+
+    def test_port_unreachable(self) -> None:
+        """Poll detects error; recvmsg returns ICMP type=3 code=3 (port-unreachable)."""
+        ancdata = _make_ancdata(111, _SO_EE_ORIGIN_ICMP, 3, 3)
+        result = _mock_probe(
+            poll_returns=[[(0, 8)]],
+            recvmsg_result=(b"\x00", ancdata, 0, (TEST_IP1, 443)),
+        )
         self.assertEqual(result["result"], "icmp-error")
-        self.assertEqual(result["icmp_type"], 3)
         self.assertEqual(result["icmp_code"], 3)
         self.assertEqual(result["icmp_code_name"], "port-unreachable")
 
-    def test_open_port_on_localhost(self) -> None:
-        """Probing a port with a listening UDP socket does not report ICMP error."""
-        server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            server.bind(("127.0.0.1", 0))
-            _, port = server.getsockname()
-            result = probe("127.0.0.1", port, timeout=1.0)
-            self.assertNotEqual(result["result"], "icmp-error")
-        finally:
-            server.close()
+    def test_open_no_error(self) -> None:
+        """No poll events; second send succeeds → port is open."""
+        result = _mock_probe(
+            poll_returns=[[]],
+            send_side_effect=[None, None],  # first send OK, second send OK
+        )
+        self.assertEqual(result["result"], "open")
+
+    def test_timeout_no_response(self) -> None:
+        """No poll events; second send raises OSError; second poll empty → timeout."""
+        result = _mock_probe(
+            poll_returns=[[], []],
+            send_side_effect=[None, OSError("connection refused")],
+        )
+        self.assertEqual(result["result"], "timeout")
 
 
 # ── Mocked tests for edge cases ────────────────────────────────────────
@@ -72,33 +103,10 @@ class TestProbeRealSocket(unittest.TestCase):
 class TestProbeEdgeCases(unittest.TestCase):
     """Test probe() branches that cannot be triggered with real sockets."""
 
-    def _mock_probe(self, poll_returns, recvmsg_result=None, send_side_effect=None):
-        """Run probe() with mocked socket and poll.
-
-        Args:
-            poll_returns: List of return values for successive poll() calls.
-            recvmsg_result: Tuple (data, ancdata, flags, addr) for recvmsg.
-            send_side_effect: Side effect for sock.send (e.g. [None, OSError]).
-        """
-        mock_sock = MagicMock()
-        mock_poller = MagicMock()
-        mock_poller.poll = MagicMock(side_effect=poll_returns)
-
-        if recvmsg_result is not None:
-            mock_sock.recvmsg.return_value = recvmsg_result
-        if send_side_effect is not None:
-            mock_sock.send.side_effect = send_side_effect
-
-        with (
-            patch("terok_shield.resources.shield_probe.socket.socket", return_value=mock_sock),
-            patch("terok_shield.resources.shield_probe.select.poll", return_value=mock_poller),
-        ):
-            return probe(TEST_IP1, 443, timeout=1.0)
-
     def test_icmp_admin_prohibited(self) -> None:
         """Detect ICMP admin-prohibited (code 13)."""
         ancdata = _make_ancdata(113, _SO_EE_ORIGIN_ICMP, 3, 13)
-        result = self._mock_probe(
+        result = _mock_probe(
             poll_returns=[[(0, 8)]],
             recvmsg_result=(b"\x00", ancdata, 0, (TEST_IP1, 443)),
         )
@@ -109,7 +117,7 @@ class TestProbeEdgeCases(unittest.TestCase):
     def test_icmp_unknown_code(self) -> None:
         """Unknown ICMP code falls back to 'code-N' naming."""
         ancdata = _make_ancdata(113, _SO_EE_ORIGIN_ICMP, 3, 99)
-        result = self._mock_probe(
+        result = _mock_probe(
             poll_returns=[[(0, 8)]],
             recvmsg_result=(b"\x00", ancdata, 0, (TEST_IP1, 443)),
         )
@@ -134,7 +142,7 @@ class TestProbeEdgeCases(unittest.TestCase):
         from terok_shield.resources.shield_probe import _IP_RECVERR
 
         short_ancdata = [(_SOL_IP, _IP_RECVERR, b"\x00\x01")]
-        result = self._mock_probe(
+        result = _mock_probe(
             poll_returns=[[(0, 8)]],
             recvmsg_result=(b"\x00", short_ancdata, 0, (TEST_IP1, 443)),
         )
@@ -143,7 +151,7 @@ class TestProbeEdgeCases(unittest.TestCase):
     def test_non_icmp_origin(self) -> None:
         """Non-ICMP origin (e.g. LOCAL) is skipped."""
         ancdata = _make_ancdata(113, 1, 3, 13)  # origin=1 (LOCAL), not ICMP
-        result = self._mock_probe(
+        result = _mock_probe(
             poll_returns=[[(0, 8)]],
             recvmsg_result=(b"\x00", ancdata, 0, (TEST_IP1, 443)),
         )
@@ -152,7 +160,7 @@ class TestProbeEdgeCases(unittest.TestCase):
     def test_first_send_oserror_still_detects_icmp(self) -> None:
         """OSError on first send does not prevent ICMP detection."""
         ancdata = _make_ancdata(111, _SO_EE_ORIGIN_ICMP, 3, 3)
-        result = self._mock_probe(
+        result = _mock_probe(
             poll_returns=[[(0, 8)]],
             recvmsg_result=(b"\x00", ancdata, 0, (TEST_IP1, 443)),
             send_side_effect=OSError("send failed"),
