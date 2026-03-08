@@ -18,6 +18,7 @@ from terok_shield.cli import main
 from tests.testnet import (
     ALLOWED_TARGET_HTTP,
     ALLOWED_TARGET_IPS,
+    TEST_IP1,
 )
 
 from .conftest import nft_missing, podman_missing
@@ -143,5 +144,5 @@ class TestCLIErrors:
     def test_cli_allow_bad_container(self, shield_env: Path) -> None:
         """``main(["allow", "nonexistent", "1.2.3.4"])`` exits 1."""
         with pytest.raises(SystemExit) as exc_info:
-            main(["allow", "nonexistent-container-xyz", "1.2.3.4"])
+            main(["allow", "nonexistent-container-xyz", TEST_IP1])
         assert exc_info.value.code == 1
