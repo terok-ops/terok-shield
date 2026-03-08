@@ -17,8 +17,8 @@ rootless Podman's user namespace.
 
 - Default-deny outbound connectivity
 - Allowlist-based access to specific destinations (domains or IPs)
-- Block RFC1918/link-local traffic unless explicitly whitelisted (prevent lateral movement)
-- Log a notice when RFC1918 addresses or large CIDRs are whitelisted
+- Block RFC1918/link-local traffic unless explicitly allowlisted (prevent lateral movement)
+- Log a notice when RFC1918 addresses or large CIDRs are allowlisted
 - Audit log all firewall events
 - Fail closed on any hook failure
 
@@ -96,8 +96,8 @@ IPv6 drop → established → DNS → gate → allow_v4 → RFC1918 reject → I
 ```
 
 **Rule ordering rationale:** the allow set (`@allow_v4`) is evaluated *before*
-RFC1918 reject rules. This lets operators whitelist specific RFC1918 addresses
-(e.g., local infrastructure) via allowlist profiles. Whitelisting RFC1918
+RFC1918 reject rules. This lets operators allowlist specific RFC1918 addresses
+(e.g., local infrastructure) via allowlist profiles. Allowlisting RFC1918
 addresses or large CIDRs is logged with action `"note"` in the audit trail.
 
 ### IPv6

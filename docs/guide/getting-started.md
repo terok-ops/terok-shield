@@ -104,7 +104,7 @@ Breaking this down:
 5. If any step fails, the container is torn down (fail-closed)
 
 From inside the container, only the allowed destinations are reachable.
-All other outbound traffic is dropped. Whitelisting RFC1918 addresses
+All other outbound traffic is dropped. Allowlisting RFC1918 addresses
 (private networks) or large CIDRs generates a special notice in the audit
 log.
 
@@ -115,7 +115,7 @@ While the container is running, you can modify its allow set:
 ```bash
 # Allow a domain (resolves to IPs automatically)
 terok-shield allow my-container example.com
-# Allowed example.com -> 93.184.215.14 for my-container
+# Allowed example.com -> <resolved-ip> for my-container
 
 # Allow a raw IP
 terok-shield allow my-container 203.0.113.10

@@ -90,7 +90,7 @@ The container starts with a default-deny firewall — only destinations in the
 
 ```bash
 terok-shield allow my-container example.com
-# Allowed example.com -> 93.184.215.14 for my-container
+# Allowed example.com -> <resolved-ip> for my-container
 
 terok-shield deny my-container example.com   # revoke later
 ```

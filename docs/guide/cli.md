@@ -74,7 +74,7 @@ terok-shield allow <container> <target>
 
 ```bash
 terok-shield allow my-container example.com
-# Allowed example.com -> 93.184.215.14 for my-container
+# Allowed example.com -> <resolved-ip> for my-container
 
 terok-shield allow my-container 203.0.113.10
 # Allowed 203.0.113.10 -> 203.0.113.10 for my-container
@@ -98,7 +98,7 @@ terok-shield deny <container> <target>
 
 ```bash
 terok-shield deny my-container example.com
-# Denied example.com (93.184.215.14) for my-container
+# Denied example.com (<resolved-ip>) for my-container
 ```
 
 ## rules

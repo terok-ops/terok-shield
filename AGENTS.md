@@ -85,7 +85,7 @@ make spdx NAME="Real Human Name" FILES="src/terok_shield/new_file.py"  # Add SPD
 `nft.py` is the auditable security boundary:
 - **Only stdlib + `nft_constants.py` imports** (`ipaddress`, `re`, `textwrap`, and the literals-only `nft_constants`)
 - All inputs validated (`safe_ip()`, `safe_name()`) before string interpolation
-- Whitelisting RFC1918 addresses or large CIDRs generates a notice in the audit log
+- Allowlisting RFC1918 addresses or large CIDRs generates a notice in the audit log
 - Enforced by AST import isolation test + bandit SAST
 
 ## Module Boundaries (tach)

@@ -22,7 +22,7 @@ Each line is a JSON object:
 | `setup` | Firewall setup step (ruleset applied, IPs loaded, verification) |
 | `allow` | Domain/IP added to allow set at runtime |
 | `deny` | Domain/IP removed from allow set at runtime |
-| `note` | Advisory event (e.g. RFC1918 address whitelisted) |
+| `note` | Advisory event (e.g. RFC1918 or link-local address allowlisted) |
 | `error` | Something failed |
 
 ### Viewing logs
@@ -66,8 +66,17 @@ journalctl -k --grep TEROK_SHIELD
 
 In `~/.config/terok-shield/config.yml`:
 
+To disable logging of allowed connections only (denied connections are still logged):
+
 ```yaml
 audit:
-  enabled: false        # disable all application logging
-  log_allowed: false    # or just disable logging of allowed connections
+  enabled: true
+  log_allowed: false
+```
+
+To disable all application logging:
+
+```yaml
+audit:
+  enabled: false
 ```
