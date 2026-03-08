@@ -11,75 +11,69 @@ make install-dev
 ## Commands
 
 ```bash
-make lint        # ruff check + format check
-make format      # auto-fix
-make test        # pytest with coverage
-make security    # bandit SAST scan
-make docstrings  # docstring coverage (95% minimum)
-make deadcode    # vulture dead code check
-make reuse       # SPDX license compliance
-make check       # all of the above
-make docs        # serve documentation locally
-make docs-build  # build documentation for deployment
+# Before every commit
+make lint             # ruff check + format check
+make format           # auto-fix lint issues
+
+# Before pushing
+make test             # unit tests with coverage
+make check            # full CI suite (lint + test + tach + security + docstrings + deadcode + reuse)
+
+# Integration tests (each target = one directory)
+make test-host        # tests/integration/host/    — host-only, no containers
+make test-network     # tests/integration/network/ — needs dig + internet
+make test-podman      # tests/integration/podman/  — needs podman + nft + internet
+make test-integration # all tiers
+
+# Other
+make tach             # check module boundary rules
+make security         # bandit SAST scan
+make docstrings       # docstring coverage (95% minimum)
+make reuse            # SPDX license compliance
+make docs             # serve documentation locally
 ```
-
-## Module overview
-
-| File | Role |
-|------|------|
-| `nft.py` | **Security boundary** — nftables ruleset generation, input validation, self-verification. Zero non-stdlib imports. |
-| `config.py` | `ShieldConfig` dataclass, `ShieldMode` enum, path helpers, config loading |
-| `run.py` | Subprocess wrappers for `nft`, `nsenter`, `dig`, `podman inspect` |
-| `dns.py` | Domain allowlist parsing, DNS resolution, timestamp-based caching |
-| `profiles.py` | Profile (domain list) loading and composition |
-| `hook.py` | OCI hook entry point — fail-closed container firewall application |
-| `standard.py` | Standard mode lifecycle (OCI hooks, per-container netns) |
-| `hardened.py` | Hardened mode lifecycle (bridge network, rootless-netns) |
-| `audit.py` | JSON-lines audit logging |
-| `cli.py` | Standalone CLI entry point |
 
 ## Conventions
 
-- **Python 3.12+** with type hints
+- **Python 3.12+** with modern type hints (`X | None`, not `Optional[X]`)
 - **ruff** for linting and formatting (100 char line length)
-- **SPDX headers** on all `.py` files — use `make spdx NAME="Real Human Name" FILES="path"` to add them. NAME must be the real name (ASCII-only) of the person who created the file. Use a single year, not a range
-- **Docstrings** on all public functions (95% coverage enforced)
-- **`nft.py` must not import non-stdlib modules** — this is the auditable security boundary
+- **SPDX headers** on all `.py` files — use `make spdx NAME="Real Human Name" FILES="path"`
+- **Docstrings** on all public functions (95% coverage enforced in CI)
+- **`nft.py` must not import non-stdlib modules** — auditable security boundary
+- **Module boundaries** enforced by tach (`tach.toml`) — run `make tach` after changing imports
 
 ## Testing
 
+### Unit tests
+
 ```bash
-make test        # unit tests (no network, no podman)
-make test-podman # integration tests (requires podman, nft, internet)
-make check       # full CI suite (unit tests + lint + tach + ...)
+make test    # runs tests/unit/ with coverage
 ```
 
-Tests live in `tests/` and mirror the source structure. When adding new functionality,
-add corresponding tests.
+Unit tests mock all subprocess calls and filesystem access. No network, no
+containers.
 
-### Integration tests and network access
+### Integration tests
 
-The integration tests in `tests/integration/` exercise real container networking
-and **make outbound connections to the public internet**. They require:
+Integration tests are organized into directories by environment requirements:
 
-- `podman` and `nft` installed
-- Outbound internet access (HTTP/HTTPS and DNS)
+| Directory | Marker | What it needs | CI |
+|-----------|--------|---------------|-----|
+| `host/` | `needs_host_features` | Linux kernel only (IP_RECVERR, filesystem) | Yes |
+| `network/` | `needs_internet` | `dig` + outbound internet | No |
+| `podman/` | `needs_podman` + `needs_internet` | podman + nft + internet | No |
 
-The following external IPs, domains, and URLs are contacted during test runs.
-This list is auto-generated from
-[`tests/testnet.py`](https://github.com/terok-ai/terok-shield/blob/master/tests/testnet.py):
+Run any tier by targeting its directory — or right-click the directory in your
+IDE. Skip markers (`podman_missing`, `nft_missing`, `dig_missing`) handle
+graceful degradation when binaries are absent.
 
-```python
---8<-- "tests/testnet.py:outbound-targets"
-```
+`host/` tests run in CI alongside unit tests. `podman/` and `network/` tests
+can be triggered manually via the **Integration Tests** workflow
+(`workflow_dispatch`).
 
-All targets are well-known public DNS services. No private or
-authenticated endpoints are contacted. If your environment blocks
-outbound traffic, these tests will be skipped automatically (the
-`_check_internet()` helper detects missing connectivity).
+### Network access
 
-### Integration tests in CI
-
-Integration tests are excluded from the main CI workflow (`-m "not integration"`).
-A separate **Integration Tests** workflow can be triggered manually from the
-Actions tab (`workflow_dispatch`) — select the workflow, pick the branch, and run.
+Integration tests in `network/` and `podman/` make outbound connections to
+public DNS services (Cloudflare, Google). All targets are defined in
+[`tests/testnet.py`](https://github.com/terok-ai/terok-shield/blob/master/tests/testnet.py).
+No private or authenticated endpoints are contacted.

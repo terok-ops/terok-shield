@@ -78,8 +78,9 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Developer Guide:
-    - Security Model: SECURITY.md
+  - Guide:
+    - Security & Design: SECURITY.md
+    - Architecture: DESIGN.md
     - Contributing: DEVELOPER.md
     - Code Quality: quality-report.md
   - API Reference: reference/
