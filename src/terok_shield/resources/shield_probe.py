@@ -85,8 +85,11 @@ def probe(host: str, port: int = 443, timeout: float = 3.0) -> dict:
             pass
 
         # Wait for the ICMP error to arrive on the error queue.
-        readable, _, errors = select.select([], [], [sock], timeout)
-        if not errors:
+        # poll() + POLLERR reliably detects error queue events on Linux;
+        # select() exceptfds does NOT signal them on many kernels.
+        poller = select.poll()
+        poller.register(sock, select.POLLERR)
+        if not poller.poll(timeout * 1000):
             # No error within timeout — port may be open or packet dropped.
             # Try a second send to check if the socket is still usable.
             try:
@@ -95,8 +98,7 @@ def probe(host: str, port: int = 443, timeout: float = 3.0) -> dict:
             except OSError:
                 pass
             # Re-check the error queue one more time.
-            _, _, errors = select.select([], [], [sock], 0.1)
-            if not errors:
+            if not poller.poll(100):
                 return {**base, "result": "timeout"}
 
         # Read the ICMP error from the error queue.
