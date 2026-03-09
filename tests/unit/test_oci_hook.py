@@ -9,8 +9,8 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from terok_shield.hook import _parse_oci_state, _read_resolved_ips, apply_hook, hook_main
 from terok_shield.nft_constants import RFC1918
+from terok_shield.oci_hook import _parse_oci_state, _read_resolved_ips, apply_hook, hook_main
 from terok_shield.run import ExecError
 
 from ..testnet import TEST_IP1, TEST_IP2
@@ -73,7 +73,7 @@ class TestParseOciState(unittest.TestCase):
 class TestReadResolvedIps(unittest.TestCase):
     """Tests for _read_resolved_ips."""
 
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_reads_file(self, mock_dir: unittest.mock.Mock) -> None:
         """Read IPs from resolved file."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,7 +82,7 @@ class TestReadResolvedIps(unittest.TestCase):
             result = _read_resolved_ips("test-ctr")
             self.assertEqual(result, [TEST_IP1, TEST_IP2])
 
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_missing_file(self, mock_dir: unittest.mock.Mock) -> None:
         """Return empty list for missing resolved file."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,7 +90,7 @@ class TestReadResolvedIps(unittest.TestCase):
             result = _read_resolved_ips("nonexistent")
             self.assertEqual(result, [])
 
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_skips_blank_lines(self, mock_dir: unittest.mock.Mock) -> None:
         """Skip blank lines in resolved file."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,9 +111,9 @@ class TestReadResolvedIps(unittest.TestCase):
 class TestApplyHook(unittest.TestCase):
     """Tests for apply_hook."""
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_success_no_ips(
         self,
         mock_dir: unittest.mock.Mock,
@@ -144,9 +144,9 @@ class TestApplyHook(unittest.TestCase):
             self.assertIn("verification passed", details)
             self.assertIn("applied with 0 allowed IPs", details)
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_success_with_ips(
         self,
         mock_dir: unittest.mock.Mock,
@@ -187,9 +187,9 @@ class TestApplyHook(unittest.TestCase):
             self.assertIn("verification passed", details)
             self.assertIn("applied with 2 allowed IPs", details)
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_fail_closed_on_apply_error(
         self,
         mock_dir: unittest.mock.Mock,
@@ -206,9 +206,9 @@ class TestApplyHook(unittest.TestCase):
             self.assertEqual(mock_log.call_args[0], ("test-ctr", "error"))
             self.assertIn("apply failed", mock_log.call_args[1]["detail"])
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_fail_closed_on_add_elements_error(
         self,
         mock_dir: unittest.mock.Mock,
@@ -229,9 +229,9 @@ class TestApplyHook(unittest.TestCase):
             self.assertEqual(mock_log.call_args[0], ("test-ctr", "error"))
             self.assertIn("add-elements failed", mock_log.call_args[1]["detail"])
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_fail_closed_on_list_error(
         self,
         mock_dir: unittest.mock.Mock,
@@ -251,9 +251,9 @@ class TestApplyHook(unittest.TestCase):
             self.assertEqual(mock_log.call_args[0], ("test-ctr", "error"))
             self.assertIn("list failed", mock_log.call_args[1]["detail"])
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_fail_closed_on_verify_error(
         self,
         mock_dir: unittest.mock.Mock,
@@ -273,9 +273,9 @@ class TestApplyHook(unittest.TestCase):
             self.assertEqual(mock_log.call_args[0], ("test-ctr", "error"))
             self.assertIn("verification failed", mock_log.call_args[1]["detail"])
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook._read_resolved_ips")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook._read_resolved_ips")
     def test_fail_closed_on_cache_read_error(
         self,
         mock_read: unittest.mock.Mock,
@@ -295,9 +295,9 @@ class TestApplyHook(unittest.TestCase):
 class TestIpClassification(unittest.TestCase):
     """Tests for RFC1918 and broad CIDR classification logging."""
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_rfc1918_logged_as_note(
         self,
         mock_dir: unittest.mock.Mock,
@@ -318,9 +318,9 @@ class TestIpClassification(unittest.TestCase):
                 )
             )
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_broad_cidr_logged_as_note(
         self,
         mock_dir: unittest.mock.Mock,
@@ -341,9 +341,9 @@ class TestIpClassification(unittest.TestCase):
                 )
             )
 
-    @unittest.mock.patch("terok_shield.hook.log_event")
-    @unittest.mock.patch("terok_shield.hook.nft_via_nsenter")
-    @unittest.mock.patch("terok_shield.hook.shield_resolved_dir")
+    @unittest.mock.patch("terok_shield.oci_hook.log_event")
+    @unittest.mock.patch("terok_shield.oci_hook.nft_via_nsenter")
+    @unittest.mock.patch("terok_shield.oci_hook.shield_resolved_dir")
     def test_no_note_for_public_ips(
         self,
         mock_dir: unittest.mock.Mock,
@@ -363,21 +363,21 @@ class TestIpClassification(unittest.TestCase):
 class TestHookMain(unittest.TestCase):
     """Tests for hook_main entry point."""
 
-    @unittest.mock.patch("terok_shield.hook.apply_hook")
+    @unittest.mock.patch("terok_shield.oci_hook.apply_hook")
     def test_success(self, mock_apply: unittest.mock.Mock) -> None:
         """Return 0 on success."""
         rc = hook_main(_oci_state("test-ctr", 42))
         self.assertEqual(rc, 0)
         mock_apply.assert_called_once_with("test-ctr", "42")
 
-    @unittest.mock.patch("terok_shield.hook.apply_hook")
+    @unittest.mock.patch("terok_shield.oci_hook.apply_hook")
     def test_invalid_json(self, mock_apply: unittest.mock.Mock) -> None:
         """Return 1 on invalid OCI state."""
         rc = hook_main("not json")
         self.assertEqual(rc, 1)
         mock_apply.assert_not_called()
 
-    @unittest.mock.patch("terok_shield.hook.apply_hook", side_effect=RuntimeError("boom"))
+    @unittest.mock.patch("terok_shield.oci_hook.apply_hook", side_effect=RuntimeError("boom"))
     def test_runtime_error(self, mock_apply: unittest.mock.Mock) -> None:
         """Return 1 on RuntimeError from apply_hook."""
         rc = hook_main(_oci_state())
