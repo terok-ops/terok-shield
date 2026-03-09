@@ -11,7 +11,7 @@ from pathlib import Path
 from .nft_constants import (
     BRIDGE_GATEWAY as BRIDGE_GATEWAY,  # noqa: F401
     BRIDGE_SUBNET as BRIDGE_SUBNET,  # noqa: F401
-    DEFAULT_GATE_PORT as DEFAULT_GATE_PORT,
+    DEFAULT_GATE_PORT as DEFAULT_GATE_PORT,  # noqa: F401
     PASTA_DNS as PASTA_DNS,  # noqa: F401
 )
 
