@@ -52,6 +52,7 @@ plugins:
       scripts:
         - docs/gen_ref_pages.py
         - docs/gen_quality_report.py
+        - docs/gen_test_map.py
   - literate-nav:
       nav_file: SUMMARY.md
   - section-index
@@ -83,6 +84,7 @@ nav:
     - Architecture: DESIGN.md
     - Contributing: DEVELOPER.md
     - Code Quality: quality-report.md
+    - Integration Test Map: test-map.md
   - API Reference: reference/
 
 extra:

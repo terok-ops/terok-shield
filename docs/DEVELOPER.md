@@ -19,11 +19,12 @@ make format           # auto-fix lint issues
 make test             # unit tests with coverage
 make check            # full CI suite (lint + test + tach + security + docstrings + deadcode + reuse)
 
-# Integration tests (each target = one directory)
-make test-host        # tests/integration/host/    — host-only, no containers
-make test-network     # tests/integration/network/ — needs dig + internet
-make test-podman      # tests/integration/podman/  — needs podman + nft + internet
-make test-integration # all tiers
+# Integration tests (filtered by marker)
+make test-host        # -m "needs_host_features" — host-only, no containers
+make test-network     # -m "needs_internet and not needs_podman" — needs dig + internet
+make test-podman      # -m "needs_podman" — needs podman + nft + internet
+make test-integration # all integration tests
+make test-map         # generate integration test map (Markdown)
 
 # Other
 make tach             # check module boundary rules
@@ -55,21 +56,25 @@ containers.
 
 ### Integration tests
 
-Integration tests are organized into directories by environment requirements:
+Integration tests are organized by **workflow/feature area** (not environment tier).
+Environment requirements are expressed via pytest markers:
 
-| Directory | Marker | What it needs | CI |
-|-----------|--------|---------------|-----|
-| `host/` | `needs_host_features` | Linux kernel only (IP_RECVERR, filesystem) | Yes |
-| `network/` | `needs_internet` | `dig` + outbound internet | No |
-| `podman/` | `needs_podman` + `needs_internet` | podman + nft + internet | No |
+| Marker | What it needs | CI |
+|--------|---------------|-----|
+| `needs_host_features` | Linux kernel only (IP_RECVERR, filesystem) | Yes |
+| `needs_internet` | `dig` + outbound internet | No |
+| `needs_podman` | podman + nft (+ internet) | No |
 
-Run any tier by targeting its directory — or right-click the directory in your
-IDE. Skip markers (`podman_missing`, `nft_missing`, `dig_missing`) handle
+Directories group tests by what they test: `setup/`, `launch/`, `blocking/`,
+`allow_deny/`, `dns/`, `observability/`, `safety/`, `cli/`. See the
+[Integration Test Map](test-map.md) for a full listing.
+
+Skip guards (`podman_missing`, `nft_missing`, `dig_missing`) handle
 graceful degradation when binaries are absent.
 
-`host/` tests run in CI alongside unit tests. `podman/` and `network/` tests
-can be triggered manually via the **Integration Tests** workflow
-(`workflow_dispatch`).
+`needs_host_features` tests run in CI alongside unit tests. `needs_podman`
+and `needs_internet` tests can be triggered manually via the **Integration
+Tests** workflow (`workflow_dispatch`).
 
 ### Network access
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared test utilities for podman integration tests.
+"""Shared test utilities for integration tests.
 
 Provides container exec helpers and assertion functions used by both
 the internal firewall tests and the public API / CLI lifecycle tests.

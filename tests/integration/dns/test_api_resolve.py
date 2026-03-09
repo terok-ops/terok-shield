@@ -1,14 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for ``shield_resolve()`` — needs internet, not podman."""
+"""Integration tests: shield_resolve() and CLI resolve."""
 
 from pathlib import Path
 
 import pytest
 
 from terok_shield import shield_resolve
+from terok_shield.cli import main
 from tests.testnet import TEST_IP4
+
+from ..conftest import nft_missing, podman_missing
+
+# ── Public API resolve ───────────────────────────────────
 
 
 @pytest.mark.needs_internet
@@ -44,3 +49,21 @@ class TestShieldResolve:
         assert ips, "Force-resolve should return at least one IP"
         assert TEST_IP4 not in ips, "Sentinel IP should be replaced by real resolution"
         assert TEST_IP4 not in cache_file.read_text(), "Cache should be overwritten"
+
+
+# ── CLI resolve ──────────────────────────────────────────
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@podman_missing
+@nft_missing
+class TestCLIResolve:
+    """Verify ``terok-shield resolve`` via CLI."""
+
+    def test_cli_resolve(self, shield_env: Path, capsys: pytest.CaptureFixture) -> None:
+        """``main(["resolve", container])`` prints resolved IP count."""
+        main(["resolve", "cli-resolve-test"])
+        captured = capsys.readouterr()
+        assert "Resolved" in captured.out
+        assert "cli-resolve-test" in captured.out

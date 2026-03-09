@@ -1,4 +1,4 @@
-.PHONY: all lint format test test-host test-network test-podman test-integration tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
+.PHONY: all lint format test test-host test-network test-podman test-integration test-map tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
 
 all: check
 
@@ -17,19 +17,23 @@ test:
 	poetry run pytest tests/unit/ --cov=terok_shield --cov-report=term-missing
 	@echo "NOTE: This security-critical package targets 100% test coverage."
 
-# Integration tests by tier (each target = one directory)
+# Integration tests by environment marker
 test-host:
-	poetry run pytest tests/integration/host/ -v
+	poetry run pytest tests/integration/ -m "needs_host_features" -v
 
 test-network:
-	poetry run pytest tests/integration/network/ -v
+	poetry run pytest tests/integration/ -m "needs_internet and not needs_podman" -v
 
 test-podman:
-	poetry run pytest tests/integration/podman/ -v
+	poetry run pytest tests/integration/ -m "needs_podman" -v
 
 # All integration tests (all tiers)
 test-integration:
 	poetry run pytest tests/integration/ -v
+
+# Generate integration test map (Markdown table grouped by directory)
+test-map:
+	poetry run python scripts/test-map.py
 
 # Check module boundary rules (tach.toml)
 tach:

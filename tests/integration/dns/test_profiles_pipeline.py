@@ -3,7 +3,6 @@
 
 """Integration tests: profile loading → DNS resolution → cache pipeline."""
 
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from terok_shield.dns import resolve_and_cache
 from terok_shield.profiles import load_profile
 from tests.testnet import CLOUDFLARE_DOMAIN, TEST_IP99
 
-dig_missing = pytest.mark.skipif(not shutil.which("dig"), reason="dig not installed")
+from ..conftest import dig_missing
 
 
 @pytest.mark.needs_internet

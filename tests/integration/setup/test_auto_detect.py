@@ -7,7 +7,7 @@ import pytest
 
 from terok_shield.config import ShieldMode, _auto_detect_mode
 
-from .conftest import podman_missing
+from ..conftest import podman_missing
 
 
 @pytest.mark.needs_podman
