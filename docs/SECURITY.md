@@ -18,7 +18,7 @@ rootless Podman's user namespace.
 - Default-deny outbound connectivity
 - Allowlist-based access to specific destinations (domains or IPs)
 - Block RFC1918/link-local traffic unless explicitly allowlisted (prevent lateral movement)
-- Log a notice when RFC1918 addresses or large CIDRs are allowlisted
+- Log a notice when RFC1918, link-local addresses, or large CIDRs are allowlisted
 - Audit log all firewall events
 - Fail closed on any hook failure
 

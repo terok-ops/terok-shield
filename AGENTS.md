@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`terok-shield` provides nftables-based egress firewalling for rootless Podman containers. It enforces default-deny outbound network filtering with curated domain allowlists and connection audit logging.
+`terok-shield` provides nftables-based egress firewalling for rootless Podman containers. It enforces default-deny outbound network filtering with curated allowlists (domains and IPs) and connection audit logging.
 
 ## Technology Stack
 

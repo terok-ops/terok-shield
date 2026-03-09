@@ -10,8 +10,8 @@ destinations — everything else is dropped.
 
 ### Features
 
-- **Default-deny egress** with curated domain allowlists
-- **DNS-based allowlisting** — domains resolved at setup, cached automatically
+- **Default-deny egress** with curated allowlists (domains and IPs)
+- **DNS-based allowlisting** — domain names resolved before container start, cached automatically
 - **Live allow/deny** at runtime for individual containers
 - **Connection audit logging** (JSON-lines lifecycle logs + kernel-level per-packet nftables logs)
 - **Two modes**: standard (OCI hook, zero-root) and hardened (bridge + rootless-netns)
@@ -76,7 +76,7 @@ terok-shield resolve my-container    # pre-resolve DNS → cached IPs
 
 podman run --rm -it \
   --name my-container \
-  --annotation terok.shield.profiles=dev-standard \
+  --annotation terok.shield.profiles=dev-standard,my-project \
   --hooks-dir ~/.local/state/terok-shield/hooks \
   --cap-drop NET_ADMIN --cap-drop NET_RAW \
   --security-opt no-new-privileges \
