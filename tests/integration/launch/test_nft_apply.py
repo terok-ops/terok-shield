@@ -9,7 +9,7 @@ import pytest
 
 from terok_shield.nft import standard_ruleset, verify_ruleset
 
-from .conftest import nsenter_nft
+from ..conftest import nsenter_nft
 
 
 def _apply(pid: str) -> None:

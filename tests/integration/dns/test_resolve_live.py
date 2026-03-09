@@ -3,7 +3,6 @@
 
 """Integration tests: DNS resolution with real dig."""
 
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -12,7 +11,7 @@ import pytest
 from terok_shield.dns import resolve_and_cache, resolve_domains
 from tests.testnet import CLOUDFLARE_DOMAIN, GOOGLE_DNS_DOMAIN, NONEXISTENT_DOMAIN, TEST_IP1
 
-dig_missing = pytest.mark.skipif(not shutil.which("dig"), reason="dig not installed")
+from ..conftest import dig_missing
 
 
 @pytest.mark.needs_internet

@@ -5,6 +5,7 @@
 
 import unittest
 
+from terok_shield.config import BRIDGE_GATEWAY, BRIDGE_SUBNET
 from terok_shield.nft import (
     RFC1918,
     add_elements,
@@ -17,7 +18,7 @@ from terok_shield.nft import (
     verify_ruleset,
 )
 
-from ..testnet import LINK_LOCAL_DNS, TEST_IP1, TEST_IP2, TEST_NET1
+from ..testnet import BRIDGE_CONTAINER_IP, LINK_LOCAL_DNS, TEST_IP1, TEST_IP2, TEST_NET1
 
 
 class TestSafeName(unittest.TestCase):
@@ -205,13 +206,13 @@ class TestHardenedRuleset(unittest.TestCase):
 
     def test_contains_bridge_gateway(self) -> None:
         """Bridge gateway must appear in ruleset."""
-        rs = hardened_ruleset(gw="10.91.0.1")
-        self.assertIn("10.91.0.1", rs)
+        rs = hardened_ruleset(gw=BRIDGE_GATEWAY)
+        self.assertIn(BRIDGE_GATEWAY, rs)
 
     def test_contains_bridge_subnet(self) -> None:
         """Bridge subnet must appear in ruleset."""
-        rs = hardened_ruleset(subnet="10.91.0.0/24")
-        self.assertIn("10.91.0.0/24", rs)
+        rs = hardened_ruleset(subnet=BRIDGE_SUBNET)
+        self.assertIn(BRIDGE_SUBNET, rs)
 
     def test_all_rfc1918_present(self) -> None:
         """All RFC1918 ranges must be blocked."""
@@ -295,8 +296,8 @@ class TestForwardRule(unittest.TestCase):
 
     def test_basic(self) -> None:
         """Generate forward rule with container name and IP."""
-        result = forward_rule("mycontainer", "10.91.0.5")
-        self.assertIn("10.91.0.5", result)
+        result = forward_rule("mycontainer", BRIDGE_CONTAINER_IP)
+        self.assertIn(BRIDGE_CONTAINER_IP, result)
         self.assertIn("mycontainer_allow_v4", result)
         self.assertIn("terok_shield:mycontainer", result)
 

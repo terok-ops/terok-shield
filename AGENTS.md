@@ -36,13 +36,14 @@ make reuse      # Check REUSE (SPDX license/copyright) compliance
 make check      # Run lint + test + tach + security + docstrings + deadcode + reuse (equivalent to CI)
 ```
 
-**Integration tests (each target = one directory):**
+**Integration tests (filtered by marker):**
 ```bash
 poetry install --with test  # ensure terok-shield is installed in Poetry's venv
-make test-host              # tests/integration/host/    (no containers, runs in CI)
-make test-network           # tests/integration/network/ (dig + internet)
-make test-podman            # tests/integration/podman/  (podman + nft + internet)
-make test-integration       # all tiers
+make test-host              # -m "needs_host_features" (no containers, runs in CI)
+make test-network           # -m "needs_internet and not needs_podman" (dig + internet)
+make test-podman            # -m "needs_podman" (podman + nft + internet)
+make test-integration       # all integration tests
+make test-map               # generate integration test map (Markdown)
 ```
 
 **Other useful commands:**
@@ -108,24 +109,34 @@ The project uses [tach](https://github.com/gauge-sh/tach) to enforce module boun
 
 ## Integration Tests
 
-Integration tests live in `tests/integration/` and are organized into subdirectories by environment requirements:
+Integration tests live in `tests/integration/` and are organized by **workflow/feature area**. Environment requirements are expressed via pytest markers, not directory placement:
 
-| Directory | Marker | What it needs | CI |
-|-----------|--------|---------------|-----|
-| `host/` | `needs_host_features` | Linux kernel only (IP_RECVERR, filesystem) | Yes |
-| `network/` | `needs_internet` | Outbound connectivity + `dig` | No |
-| `podman/` | `needs_podman` (+ `needs_internet`) | podman + nft (+ internet) | No |
+| Directory | What it tests |
+|-----------|--------------|
+| `setup/` | Hook install, config paths, profiles, auto-detect |
+| `launch/` | pre_start, apply_hook, hook_main, nft apply |
+| `blocking/` | Default-deny, IPv6 drop, RFC1918, ICMP probe |
+| `allow_deny/` | shield_allow/deny, CLI allow/deny, nft elements |
+| `dns/` | resolve, caching, force-refresh, profile→DNS pipeline |
+| `observability/` | status, rules, logs, audit trail |
+| `safety/` | Fail-closed error paths |
+| `cli/` | CLI parsing/help (no container needed) |
+
+Makefile targets filter by marker (not by directory):
 
 ```bash
 poetry install --with test  # install package + test deps into Poetry's venv
-make test-host              # host/ only (fast, runs in CI)
-make test-network           # network/ only (dig + internet)
-make test-podman            # podman/ only (podman + nft + internet)
-make test-integration       # all tiers
+make test-host              # -m "needs_host_features" (fast, runs in CI)
+make test-network           # -m "needs_internet and not needs_podman" (dig + internet)
+make test-podman            # -m "needs_podman" (podman + nft + internet)
+make test-integration       # all integration tests
+make test-map               # generate integration test map (Markdown)
 ```
 
-- Skip markers (`podman_missing`, `nft_missing`, `dig_missing`) handle graceful degradation when binaries are absent
-- `podman/conftest.py` provides fixtures: `container` (disposable Alpine container), `container_pid`, `nft_in_netns` (session-scoped nft capability check), and the `nsenter_nft()` helper
+- **Markers**: `needs_host_features`, `needs_internet`, `needs_podman` — for test selection
+- **Skip guards**: `podman_missing`, `nft_missing`, `dig_missing` — graceful degradation when binaries are absent
+- `tests/integration/conftest.py` provides all shared fixtures: `container`, `container_pid`, `nft_in_netns`, `shielded_container`, `shield_env`, `nsenter_nft()`
+- `tests/integration/helpers.py` provides assertion helpers: `assert_blocked`, `assert_reachable`, `assert_ruleset_applied`, `exec_in_container`, `wget`
 - nft commands run inside the container's network namespace via `podman unshare nsenter -t PID -n nft` (not the host netns — rootless nft only has `CAP_NET_ADMIN` inside container-owned namespaces)
 
 ## Key Guidelines
