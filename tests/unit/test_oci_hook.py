@@ -397,10 +397,10 @@ class TestHookMain(unittest.TestCase):
     @unittest.mock.patch("terok_shield.oci_hook.apply_hook")
     def test_success(self, mock_apply: unittest.mock.Mock, mock_cfg: unittest.mock.Mock) -> None:
         """Return 0 on success (hook mode createRuntime)."""
-        mock_cfg.return_value = ShieldConfig()
+        mock_cfg.return_value = ShieldConfig(loopback_ports=(1234,))
         rc = hook_main(_oci_state("test-ctr", 42))
         self.assertEqual(rc, 0)
-        mock_apply.assert_called_once_with("test-ctr", "42", loopback_ports=())
+        mock_apply.assert_called_once_with("test-ctr", "42", loopback_ports=(1234,))
 
     @unittest.mock.patch("terok_shield.oci_hook.apply_hook")
     def test_invalid_json(self, mock_apply: unittest.mock.Mock) -> None:
