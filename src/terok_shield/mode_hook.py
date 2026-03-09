@@ -17,6 +17,7 @@ import sys
 
 from .config import (
     ANNOTATION_KEY,
+    ANNOTATION_NAME_KEY,
     ShieldConfig,
     ensure_shield_dirs,
     shield_hook_entrypoint,
@@ -51,25 +52,41 @@ def _generate_entrypoint() -> str:
     Uses the current Python interpreter so the hook runs in the
     same environment where terok-shield is installed.
     """
-    return f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -m terok_shield.oci_hook\n"
+    return f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -m terok_shield.oci_hook "$@"\n'
 
 
-def _generate_hook_json(entrypoint: str) -> str:
-    """Generate the OCI hook JSON descriptor.
-
-    The hook fires at ``createRuntime`` for containers with the
-    ``terok.shield.profiles`` annotation.
+def _generate_hook_json(entrypoint: str, stage: str) -> str:
+    """Generate an OCI hook JSON descriptor for a given stage.
 
     Args:
         entrypoint: Absolute path to the hook entrypoint script.
+        stage: OCI hook stage (``createRuntime`` or ``poststop``).
     """
     hook = {
         "version": "1.0.0",
-        "hook": {"path": entrypoint, "args": ["terok-shield-hook"]},
+        "hook": {"path": entrypoint, "args": ["terok-shield-hook", stage]},
         "when": {"annotations": {ANNOTATION_KEY: ".*"}},
-        "stages": ["createRuntime"],
+        "stages": [stage],
     }
     return json.dumps(hook, indent=2) + "\n"
+
+
+def install_hooks() -> None:
+    """Install OCI hook entrypoint and hook JSON files.
+
+    Shared by both hook and bridge modes.  Installs hooks for
+    ``createRuntime`` and ``poststop`` stages.
+    """
+    ensure_shield_dirs()
+
+    ep = shield_hook_entrypoint()
+    ep.write_text(_generate_entrypoint())
+    ep.chmod(ep.stat().st_mode | stat.S_IEXEC)
+
+    hooks_dir = shield_hooks_dir()
+    for stage in ("createRuntime", "poststop"):
+        hook_json = _generate_hook_json(str(ep), stage)
+        (hooks_dir / f"terok-shield-{stage}.json").write_text(hook_json)
 
 
 def setup(_config: ShieldConfig) -> None:
@@ -78,14 +95,7 @@ def setup(_config: ShieldConfig) -> None:
     Args:
         _config: Shield configuration (unused, kept for API consistency).
     """
-    ensure_shield_dirs()
-
-    ep = shield_hook_entrypoint()
-    ep.write_text(_generate_entrypoint())
-    ep.chmod(ep.stat().st_mode | stat.S_IEXEC)
-
-    hook_json = _generate_hook_json(str(ep))
-    (shield_hooks_dir() / "terok-shield-hook.json").write_text(hook_json)
+    install_hooks()
 
 
 def pre_start(
@@ -110,7 +120,7 @@ def pre_start(
         RuntimeError: If the OCI hook is not installed.
         FileNotFoundError: If a named profile does not exist.
     """
-    hook_json = shield_hooks_dir() / "terok-shield-hook.json"
+    hook_json = shield_hooks_dir() / "terok-shield-createRuntime.json"
     if not hook_json.is_file():
         raise RuntimeError("Shield hook not installed. Run 'terok-shield setup' first.")
 
@@ -145,6 +155,8 @@ def pre_start(
     args += [
         "--annotation",
         f"{ANNOTATION_KEY}={','.join(profiles)}",
+        "--annotation",
+        f"{ANNOTATION_NAME_KEY}={container}",
         "--hooks-dir",
         str(shield_hooks_dir()),
         "--cap-drop",

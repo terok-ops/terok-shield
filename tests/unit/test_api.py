@@ -85,22 +85,17 @@ class TestShieldPreStart(unittest.TestCase):
 
 
 class TestShieldPreStop(unittest.TestCase):
-    """Test shield_pre_stop dispatch."""
+    """Test shield_pre_stop (no-op — handled by OCI hook)."""
 
-    @mock.patch("terok_shield.log_event")
-    def test_hook_noop(self, mock_log):
+    def test_hook_noop(self):
         """shield_pre_stop is a no-op in hook mode."""
         config = ShieldConfig(mode=ShieldMode.HOOK)
         shield_pre_stop("test", config=config)
-        mock_log.assert_not_called()
 
-    @mock.patch("terok_shield.log_event")
-    @mock.patch("terok_shield.mode_bridge.pre_stop")
-    def test_bridge_dispatch(self, mock_pre_stop, _log):
-        """shield_pre_stop calls mode_bridge.pre_stop."""
+    def test_bridge_noop(self):
+        """shield_pre_stop is a no-op in bridge mode (handled by OCI hook)."""
         config = ShieldConfig(mode=ShieldMode.BRIDGE)
         shield_pre_stop("test", config=config)
-        mock_pre_stop.assert_called_once_with("test")
 
 
 class TestShieldAllow(unittest.TestCase):

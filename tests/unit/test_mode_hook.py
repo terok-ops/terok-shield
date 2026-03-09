@@ -9,13 +9,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from terok_shield.config import ANNOTATION_KEY, ShieldConfig, ShieldMode
+from terok_shield.config import ANNOTATION_KEY, ANNOTATION_NAME_KEY, ShieldConfig, ShieldMode
 from terok_shield.mode_hook import (
     _detect_rootless_network_mode,
     _generate_entrypoint,
     _generate_hook_json,
     allow_ip,
     deny_ip,
+    install_hooks,
     list_rules,
     pre_start,
     setup,
@@ -88,26 +89,36 @@ class TestGenerateHookJson(unittest.TestCase):
 
     def test_valid_json(self):
         """Output is valid JSON."""
-        result = json.loads(_generate_hook_json("/path/to/hook"))
+        result = json.loads(_generate_hook_json("/path/to/hook", "createRuntime"))
         self.assertEqual(result["version"], "1.0.0")
         self.assertEqual(result["hook"]["path"], "/path/to/hook")
 
     def test_annotation_filter(self):
         """Hook triggers on the shield profiles annotation."""
-        result = json.loads(_generate_hook_json("/hook"))
+        result = json.loads(_generate_hook_json("/hook", "createRuntime"))
         self.assertIn(ANNOTATION_KEY, result["when"]["annotations"])
 
     def test_create_runtime_stage(self):
         """Hook fires at createRuntime stage."""
-        result = json.loads(_generate_hook_json("/hook"))
+        result = json.loads(_generate_hook_json("/hook", "createRuntime"))
         self.assertEqual(result["stages"], ["createRuntime"])
+
+    def test_poststop_stage(self):
+        """Hook fires at poststop stage."""
+        result = json.loads(_generate_hook_json("/hook", "poststop"))
+        self.assertEqual(result["stages"], ["poststop"])
+
+    def test_stage_in_args(self):
+        """Stage appears in hook args."""
+        result = json.loads(_generate_hook_json("/hook", "poststop"))
+        self.assertIn("poststop", result["hook"]["args"])
 
 
 class TestSetup(unittest.TestCase):
     """Test hook mode setup."""
 
     def test_creates_hook_files(self):
-        """Setup creates entrypoint and hook JSON files."""
+        """Setup creates entrypoint and both stage hook JSON files."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as td:
@@ -133,10 +144,39 @@ class TestSetup(unittest.TestCase):
         self.assertTrue(ep.exists())
         self.assertIn("-m terok_shield.oci_hook", ep.read_text())
 
-        hook_json = tmp_dir / "hooks" / "terok-shield-hook.json"
-        self.assertTrue(hook_json.exists())
-        data = json.loads(hook_json.read_text())
-        self.assertEqual(data["hook"]["path"], str(ep))
+        for stage in ("createRuntime", "poststop"):
+            hook_json = tmp_dir / "hooks" / f"terok-shield-{stage}.json"
+            self.assertTrue(hook_json.exists(), f"Missing {hook_json.name}")
+            data = json.loads(hook_json.read_text())
+            self.assertEqual(data["hook"]["path"], str(ep))
+            self.assertEqual(data["stages"], [stage])
+
+
+class TestInstallHooks(unittest.TestCase):
+    """Test install_hooks shared function."""
+
+    def test_installs_both_stages(self):
+        """install_hooks creates both createRuntime and poststop hook JSON files."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp_dir = Path(td)
+            with (
+                mock.patch(
+                    "terok_shield.mode_hook.shield_hook_entrypoint",
+                    return_value=tmp_dir / "terok-shield-hook",
+                ),
+                mock.patch(
+                    "terok_shield.mode_hook.shield_hooks_dir",
+                    return_value=tmp_dir / "hooks",
+                ),
+                mock.patch("terok_shield.mode_hook.ensure_shield_dirs"),
+            ):
+                (tmp_dir / "hooks").mkdir(parents=True, exist_ok=True)
+                install_hooks()
+
+            self.assertTrue((tmp_dir / "hooks" / "terok-shield-createRuntime.json").exists())
+            self.assertTrue((tmp_dir / "hooks" / "terok-shield-poststop.json").exists())
 
 
 class TestPreStart(unittest.TestCase):
@@ -150,7 +190,7 @@ class TestPreStart(unittest.TestCase):
         self._tmpdir = Path(self._tmpdir_obj.name)
         hooks_dir = self._tmpdir / "hooks"
         hooks_dir.mkdir()
-        (hooks_dir / "terok-shield-hook.json").touch()
+        (hooks_dir / "terok-shield-createRuntime.json").touch()
         ep = self._tmpdir / "terok-shield-hook"
         ep.write_text("#!/bin/sh\n")
         ep.chmod(0o755)
@@ -258,6 +298,18 @@ class TestPreStart(unittest.TestCase):
         ann_idx = args.index("--annotation") + 1
         self.assertIn(ANNOTATION_KEY, args[ann_idx])
         self.assertIn("dev-standard,base", args[ann_idx])
+
+    @mock.patch("terok_shield.mode_hook.resolve_and_cache")
+    @mock.patch("terok_shield.mode_hook.compose_profiles", return_value=["github.com"])
+    @mock.patch("os.geteuid", return_value=1000)
+    @mock.patch("terok_shield.mode_hook._detect_rootless_network_mode", return_value="pasta")
+    def test_annotation_includes_name(self, _mode, _euid, _compose, _resolve):
+        """Annotation arg includes container name."""
+        args = pre_start(self._config(), "my-container", ["dev-standard"])
+        ann_values = [args[i + 1] for i, a in enumerate(args) if a == "--annotation"]
+        name_ann = [v for v in ann_values if ANNOTATION_NAME_KEY in v]
+        self.assertEqual(len(name_ann), 1)
+        self.assertIn("my-container", name_ann[0])
 
 
 class TestAllowDenyIp(unittest.TestCase):

@@ -19,6 +19,8 @@ from .nft_constants import (
 BRIDGE_NETWORK = "ctr-egress"
 
 ANNOTATION_KEY = "terok.shield.profiles"
+ANNOTATION_NAME_KEY = "terok.shield.name"
+ANNOTATION_MODE_KEY = "terok.shield.mode"
 
 
 class ShieldMode(enum.Enum):

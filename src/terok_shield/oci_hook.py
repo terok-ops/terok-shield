@@ -1,14 +1,20 @@
 # SPDX-FileCopyrightText: 2026 Jiri Vyskocil
 # SPDX-License-Identifier: Apache-2.0
 
-"""OCI hook entry point for hook-mode firewall.
+"""OCI hook entry point for container firewall.
 
-This module is invoked by podman as a ``createRuntime`` OCI hook.
-It receives the OCI state as JSON on stdin and applies nftables
-rules inside the container's network namespace.
+This module is invoked by podman as an OCI hook at ``createRuntime``
+and ``poststop`` stages.  It reads annotations from the OCI state to
+determine the firewall mode (hook or bridge) and dispatches accordingly.
 
-The hook is fail-closed: if any step fails, it exits non-zero and
-the container must not start with unrestricted network access.
+- **Hook mode** (default): applies nftables rules inside the container's
+  network namespace via ``nsenter``.
+- **Bridge mode**: creates per-container nft sets and forward rules in
+  podman's rootless-netns.
+
+The hook is fail-closed: if any step fails during ``createRuntime``,
+it exits non-zero and the container must not start with unrestricted
+network access.
 """
 
 import ipaddress
@@ -17,7 +23,7 @@ import re
 import sys
 
 from .audit import log_event
-from .config import shield_resolved_dir
+from .config import ANNOTATION_KEY, ANNOTATION_MODE_KEY, ANNOTATION_NAME_KEY, shield_resolved_dir
 from .nft import add_elements, hook_ruleset, verify_ruleset
 from .run import ExecError, nft_via_nsenter
 
@@ -59,14 +65,15 @@ def _classify_ips(ips: list[str]) -> tuple[list[str], list[str]]:
     return rfc1918, broad
 
 
-def _parse_oci_state(stdin_data: str) -> tuple[str, str]:
+def _parse_oci_state(stdin_data: str) -> tuple[str, str, dict[str, str]]:
     """Parse OCI state JSON from stdin.
 
     Returns:
-        Tuple of (container_id, pid).
+        Tuple of (container_id, pid, annotations).  ``pid`` is an empty
+        string when absent or zero (expected for ``poststop`` hooks).
 
     Raises:
-        ValueError: If the state is missing required fields.
+        ValueError: If the state is missing ``id`` or is not valid JSON.
     """
     try:
         state = json.loads(stdin_data)
@@ -75,10 +82,13 @@ def _parse_oci_state(stdin_data: str) -> tuple[str, str]:
     if not isinstance(state, dict):
         raise ValueError(f"OCI state must be a JSON object: {state!r}")
     cid = state.get("id")
-    pid = state.get("pid")
-    if not cid or not pid:
-        raise ValueError(f"OCI state missing id or pid: {state!r}")
-    return str(cid), str(pid)
+    if not cid:
+        raise ValueError(f"OCI state missing id: {state!r}")
+    pid = state.get("pid", 0)
+    annotations = state.get("annotations", {})
+    if not isinstance(annotations, dict):
+        annotations = {}
+    return str(cid), str(pid) if pid else "", annotations
 
 
 def _read_resolved_ips(container: str) -> list[str]:
@@ -167,23 +177,55 @@ def apply_hook(container: str, pid: str) -> None:
     log_event(container, "setup", detail=f"applied with {ip_count} allowed IPs")
 
 
-def hook_main(stdin_data: str | None = None) -> int:
+def hook_main(stdin_data: str | None = None, stage: str = "createRuntime") -> int:
     """OCI hook entry point.
 
-    Reads OCI state from stdin, applies the firewall, and returns
-    an exit code (0 = success, 1 = failure).
+    Reads OCI state from stdin, determines the firewall mode from
+    annotations, and dispatches to the appropriate handler.
+
+    Args:
+        stdin_data: OCI state JSON (reads from stdin if None).
+        stage: OCI hook stage (``createRuntime`` or ``poststop``).
+
+    Returns:
+        Exit code (0 = success, 1 = failure).
     """
     if stdin_data is None:
         stdin_data = sys.stdin.read()
 
     try:
-        container, pid = _parse_oci_state(stdin_data)
+        container_id, pid, annotations = _parse_oci_state(stdin_data)
     except ValueError as e:
         print(f"terok-shield hook: {e}", file=sys.stderr)
         return 1
 
+    mode = annotations.get(ANNOTATION_MODE_KEY, "")
+    container_name = annotations.get(ANNOTATION_NAME_KEY, "")
+
     try:
-        apply_hook(container, pid)
+        if stage == "poststop":
+            if mode == "bridge" and container_name:
+                from .mode_bridge import apply_bridge_cleanup
+
+                apply_bridge_cleanup(container_name)
+                log_event(container_name, "teardown", detail="bridge cleanup via hook")
+            return 0
+
+        # createRuntime (default)
+        if mode == "bridge":
+            if not container_name:
+                raise RuntimeError("Bridge mode requires terok.shield.name annotation")
+            profiles_str = annotations.get(ANNOTATION_KEY, "")
+            profiles = [p for p in profiles_str.split(",") if p]
+
+            from .mode_bridge import apply_bridge_setup
+
+            apply_bridge_setup(container_id, container_name, profiles)
+            log_event(container_name, "setup", detail="bridge firewall applied via hook")
+        else:
+            if not pid:
+                raise RuntimeError("Hook mode requires a valid PID in OCI state")
+            apply_hook(container_id, pid)
     except RuntimeError as e:
         print(f"terok-shield hook: {e}", file=sys.stderr)
         return 1
@@ -192,4 +234,5 @@ def hook_main(stdin_data: str | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(hook_main())
+    _stage = sys.argv[1] if len(sys.argv) > 1 else "createRuntime"
+    sys.exit(hook_main(stage=_stage))

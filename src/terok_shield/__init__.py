@@ -112,25 +112,17 @@ def shield_post_start(
     *,
     config: ShieldConfig | None = None,
 ) -> None:
-    """Post-start hook.  Only needed for bridge mode.
+    """Post-start hook (no-op — handled by OCI createRuntime hook).
+
+    Bridge-mode per-container firewall setup is now performed
+    automatically by the OCI hook.  This function is retained
+    for API compatibility.
 
     Args:
         container: Container name.
-        profiles: Profile names (defaults to config.default_profiles).
-        config: Shield configuration (loads default if None).
+        profiles: Profile names (unused).
+        config: Shield configuration (unused).
     """
-    cfg = _load_config(config)
-    if cfg.mode != ShieldMode.BRIDGE:
-        return
-
-    if profiles is None:
-        profiles = list(cfg.default_profiles)
-
-    from . import mode_bridge
-
-    mode_bridge.post_start(cfg, container, profiles)
-    if cfg.audit_enabled:
-        log_event(container, "setup", detail="bridge post_start complete")
 
 
 def shield_pre_stop(
@@ -138,21 +130,16 @@ def shield_pre_stop(
     *,
     config: ShieldConfig | None = None,
 ) -> None:
-    """Pre-stop hook.  Only needed for bridge mode.
+    """Pre-stop hook (no-op — handled by OCI poststop hook).
+
+    Bridge-mode per-container firewall cleanup is now performed
+    automatically by the OCI hook.  This function is retained
+    for API compatibility.
 
     Args:
         container: Container name.
-        config: Shield configuration (loads default if None).
+        config: Shield configuration (unused).
     """
-    cfg = _load_config(config)
-    if cfg.mode != ShieldMode.BRIDGE:
-        return
-
-    from . import mode_bridge
-
-    mode_bridge.pre_stop(container)
-    if cfg.audit_enabled:
-        log_event(container, "teardown")
 
 
 def shield_allow(

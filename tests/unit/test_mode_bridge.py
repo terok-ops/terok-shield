@@ -35,26 +35,30 @@ from ..testnet import BRIDGE_CONTAINER_IP, TEST_IP1, TEST_IP2
 class TestSetup(unittest.TestCase):
     """Test bridge mode setup."""
 
+    @mock.patch("terok_shield.mode_hook.install_hooks")
     @mock.patch("terok_shield.mode_bridge.ensure_shield_dirs")
     @mock.patch("terok_shield.mode_bridge.run_cmd")
-    def test_succeeds_when_network_exists(self, mock_run, mock_dirs):
-        """Setup succeeds if the bridge network exists."""
+    def test_succeeds_when_network_exists(self, mock_run, mock_dirs, mock_hooks):
+        """Setup succeeds if the bridge network exists and installs hooks."""
         config = ShieldConfig(mode=ShieldMode.BRIDGE)
         setup(config)
         mock_dirs.assert_called_once()
         mock_run.assert_called_once_with(["podman", "network", "exists", BRIDGE_NETWORK])
+        mock_hooks.assert_called_once()
 
+    @mock.patch("terok_shield.mode_hook.install_hooks")
     @mock.patch("terok_shield.mode_bridge.ensure_shield_dirs")
     @mock.patch(
         "terok_shield.mode_bridge.run_cmd",
         side_effect=ExecError(["podman", "network", "exists"], 1, "not found"),
     )
-    def test_raises_if_network_missing(self, mock_run, mock_dirs):
+    def test_raises_if_network_missing(self, mock_run, mock_dirs, mock_hooks):
         """Setup raises RuntimeError if bridge network is absent."""
         config = ShieldConfig(mode=ShieldMode.BRIDGE)
         with self.assertRaises(RuntimeError) as ctx:
             setup(config)
         self.assertIn(BRIDGE_NETWORK, str(ctx.exception))
+        mock_hooks.assert_not_called()
 
 
 class TestPreStart(unittest.TestCase):

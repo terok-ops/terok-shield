@@ -70,12 +70,13 @@ depends_on = [
     "terok_shield.config",
 ]
 
-# OCI hook entry point — depends on audit, config, nft, run
+# OCI hook entry point — depends on audit, config, nft, run, mode_bridge
 [[modules]]
 path = "terok_shield.oci_hook"
 depends_on = [
     "terok_shield.audit",
     "terok_shield.config",
+    "terok_shield.mode_bridge",
     "terok_shield.nft",
     "terok_shield.run",
 ]
@@ -97,6 +98,7 @@ path = "terok_shield.mode_bridge"
 depends_on = [
     "terok_shield.config",
     "terok_shield.dns",
+    "terok_shield.mode_hook",
     "terok_shield.nft",
     "terok_shield.nft_constants",
     "terok_shield.profiles",

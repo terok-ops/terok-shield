@@ -13,11 +13,15 @@ import logging
 import re
 
 from .config import (
+    ANNOTATION_KEY,
+    ANNOTATION_MODE_KEY,
+    ANNOTATION_NAME_KEY,
     BRIDGE_GATEWAY,
     BRIDGE_NETWORK,
     BRIDGE_SUBNET,
     ShieldConfig,
     ensure_shield_dirs,
+    shield_hooks_dir,
     shield_resolved_dir,
 )
 from .dns import resolve_and_cache
@@ -43,7 +47,7 @@ _SAFE_DOMAIN = re.compile(
 
 
 def setup(_config: ShieldConfig) -> None:
-    """Verify bridge network exists and create directories.
+    """Verify bridge network exists, create directories, and install OCI hooks.
 
     Args:
         _config: Shield configuration (unused, kept for API consistency).
@@ -51,6 +55,8 @@ def setup(_config: ShieldConfig) -> None:
     Raises:
         RuntimeError: If the bridge network does not exist.
     """
+    from .mode_hook import install_hooks
+
     ensure_shield_dirs()
     try:
         run_cmd(["podman", "network", "exists", BRIDGE_NETWORK])
@@ -60,6 +66,7 @@ def setup(_config: ShieldConfig) -> None:
             f"Create it with: podman network create "
             f"--subnet {BRIDGE_SUBNET} --gateway {BRIDGE_GATEWAY} {BRIDGE_NETWORK}"
         ) from None
+    install_hooks()
 
 
 def _ensure_netns(gate_port: int) -> None:
@@ -134,6 +141,14 @@ def pre_start(
         BRIDGE_NETWORK,
         "--dns",
         BRIDGE_GATEWAY,
+        "--annotation",
+        f"{ANNOTATION_KEY}={','.join(profiles)}",
+        "--annotation",
+        f"{ANNOTATION_NAME_KEY}={container}",
+        "--annotation",
+        f"{ANNOTATION_MODE_KEY}=bridge",
+        "--hooks-dir",
+        str(shield_hooks_dir()),
         "--cap-drop",
         "NET_ADMIN",
         "--cap-drop",
@@ -328,3 +343,49 @@ def _update_dnsmasq_nftsets(container: str, domains: list[str]) -> None:
     lines = [f"nftset=/{d}/4#inet#{NFT_TABLE_NAME}#{safe}_allow_v4" for d in valid]
     nftset_file = shield_resolved_dir() / f"{safe}.dnsmasq-nftset"
     nftset_file.write_text("\n".join(lines) + "\n")
+
+
+# ── OCI hook callables ──────────────────────────────────
+
+
+def apply_bridge_setup(container_id: str, container_name: str, profiles: list[str]) -> None:
+    """Set up per-container bridge-mode firewall.  Called by OCI createRuntime hook.
+
+    Creates the nft allow set, loads cached IPs, adds the forward rule,
+    and writes dnsmasq nftset config.
+
+    Args:
+        container_id: Container ID (used for ``podman inspect``).
+        container_name: Container name (used for cache/state file lookups).
+        profiles: Profile names for dnsmasq nftset generation.
+    """
+    ip = podman_inspect(
+        container_id,
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+    )
+
+    nft_via_rootless_netns(stdin=create_set(container_name))
+
+    ips = _read_resolved_cache(container_name)
+    if ips:
+        safe = safe_name(container_name)
+        cmd = add_elements(f"{safe}_allow_v4", ips)
+        if cmd:
+            nft_via_rootless_netns(stdin=cmd, check=False)
+
+    nft_via_rootless_netns(stdin=forward_rule(container_name, ip))
+
+    entries = compose_profiles(profiles)
+    domains = [e for e in entries if not is_ipv4(e)]
+    _update_dnsmasq_nftsets(container_name, domains)
+
+
+def apply_bridge_cleanup(container_name: str) -> None:
+    """Clean up per-container bridge-mode firewall.  Called by OCI poststop hook.
+
+    Deletes the forward rule, allow set, and dnsmasq nftset config.
+
+    Args:
+        container_name: Container name.
+    """
+    pre_stop(container_name)
