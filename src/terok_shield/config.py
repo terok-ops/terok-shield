@@ -194,14 +194,14 @@ def _auto_detect_mode() -> ShieldMode:
     import shutil
     import subprocess
 
-    # Check for bridge mode prerequisites (bridge network + dnsmasq)
+    # Check for bridge mode prerequisites (bridge network + dnsmasq + nft)
     try:
         subprocess.run(
             ["podman", "network", "exists", BRIDGE_NETWORK],
             check=True,
             capture_output=True,
         )
-        if shutil.which("dnsmasq"):
+        if shutil.which("dnsmasq") and shutil.which("nft"):
             return ShieldMode.BRIDGE
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass

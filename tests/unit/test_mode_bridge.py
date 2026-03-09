@@ -33,7 +33,7 @@ from ..testnet import BRIDGE_CONTAINER_IP, TEST_IP1, TEST_IP2
 
 
 class TestSetup(unittest.TestCase):
-    """Test hardened mode setup."""
+    """Test bridge mode setup."""
 
     @mock.patch("terok_shield.mode_bridge.ensure_shield_dirs")
     @mock.patch("terok_shield.mode_bridge.run_cmd")
@@ -58,7 +58,7 @@ class TestSetup(unittest.TestCase):
 
 
 class TestPreStart(unittest.TestCase):
-    """Test hardened mode pre_start."""
+    """Test bridge mode pre_start."""
 
     def _config(self, gate_port=DEFAULT_GATE_PORT):
         return ShieldConfig(mode=ShieldMode.BRIDGE, gate_port=gate_port)
@@ -142,7 +142,7 @@ class TestPreStart(unittest.TestCase):
 
 
 class TestPostStart(unittest.TestCase):
-    """Test hardened mode post_start."""
+    """Test bridge mode post_start."""
 
     def _config(self):
         return ShieldConfig(mode=ShieldMode.BRIDGE)
@@ -174,7 +174,7 @@ class TestPostStart(unittest.TestCase):
 
 
 class TestPreStop(unittest.TestCase):
-    """Test hardened mode pre_stop."""
+    """Test bridge mode pre_stop."""
 
     @mock.patch("terok_shield.mode_bridge.shield_resolved_dir")
     @mock.patch("terok_shield.mode_bridge.nft_via_rootless_netns")

@@ -104,7 +104,7 @@ class TestGenerateHookJson(unittest.TestCase):
 
 
 class TestSetup(unittest.TestCase):
-    """Test standard mode setup."""
+    """Test hook mode setup."""
 
     def test_creates_hook_files(self):
         """Setup creates entrypoint and hook JSON files."""
@@ -140,7 +140,7 @@ class TestSetup(unittest.TestCase):
 
 
 class TestPreStart(unittest.TestCase):
-    """Test standard mode pre_start."""
+    """Test hook mode pre_start."""
 
     def setUp(self):
         """Create a temporary hooks directory with entrypoint for each test."""

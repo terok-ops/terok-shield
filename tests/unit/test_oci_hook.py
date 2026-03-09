@@ -13,7 +13,7 @@ from terok_shield.nft_constants import RFC1918
 from terok_shield.oci_hook import _parse_oci_state, _read_resolved_ips, apply_hook, hook_main
 from terok_shield.run import ExecError
 
-from ..testnet import TEST_IP1, TEST_IP2
+from ..testnet import BROAD_CIDR_8, RFC1918_HOST, TEST_IP1, TEST_IP2
 
 # Mock output that passes verify_ruleset (must have chain structure
 # and RFC1918 reject rules in proper context for regex matching)
@@ -307,13 +307,13 @@ class TestIpClassification(unittest.TestCase):
         """RFC1918 IPs in resolved cache produce a 'note' log entry."""
         with tempfile.TemporaryDirectory() as tmp:
             mock_dir.return_value = Path(tmp)
-            (Path(tmp) / "test-ctr.resolved").write_text("10.0.0.5\n")
+            (Path(tmp) / "test-ctr.resolved").write_text(f"{RFC1918_HOST}\n")
             mock_nft.side_effect = ["", "", _VALID_LIST_OUTPUT]
             apply_hook("test-ctr", "42")
             note_calls = [c for c in mock_log.call_args_list if c[0][1] == "note"]
             self.assertTrue(
                 any(
-                    "rfc1918 whitelisted: 10.0.0.5" in c.kwargs.get("detail", "")
+                    f"rfc1918 whitelisted: {RFC1918_HOST}" in c.kwargs.get("detail", "")
                     for c in note_calls
                 )
             )
@@ -330,13 +330,13 @@ class TestIpClassification(unittest.TestCase):
         """Broad CIDRs (prefix <= 16) produce a 'note' log entry."""
         with tempfile.TemporaryDirectory() as tmp:
             mock_dir.return_value = Path(tmp)
-            (Path(tmp) / "test-ctr.resolved").write_text(f"203.0.0.0/8\n{TEST_IP1}\n")
+            (Path(tmp) / "test-ctr.resolved").write_text(f"{BROAD_CIDR_8}\n{TEST_IP1}\n")
             mock_nft.side_effect = ["", "", _VALID_LIST_OUTPUT]
             apply_hook("test-ctr", "42")
             note_calls = [c for c in mock_log.call_args_list if c[0][1] == "note"]
             self.assertTrue(
                 any(
-                    "broad range whitelisted: 203.0.0.0/8" in c.kwargs.get("detail", "")
+                    f"broad range whitelisted: {BROAD_CIDR_8}" in c.kwargs.get("detail", "")
                     for c in note_calls
                 )
             )

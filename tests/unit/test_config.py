@@ -331,6 +331,23 @@ class TestAutoDetectMode(unittest.TestCase):
         mock_run.return_value = unittest.mock.Mock(returncode=0)
         self.assertEqual(_auto_detect_mode(), ShieldMode.BRIDGE)
 
+    @unittest.mock.patch(
+        "shutil.which",
+        side_effect=lambda n: {
+            "dnsmasq": "/usr/sbin/dnsmasq",
+        }.get(n),
+    )
+    @unittest.mock.patch("subprocess.run")
+    def test_bridge_without_nft_raises(
+        self, mock_run: unittest.mock.Mock, _which: unittest.mock.Mock
+    ) -> None:
+        """Raise RuntimeError when bridge network + dnsmasq exist but nft is missing."""
+        from terok_shield.config import _auto_detect_mode
+
+        mock_run.return_value = unittest.mock.Mock(returncode=0)
+        with self.assertRaises(RuntimeError):
+            _auto_detect_mode()
+
 
 class TestGatePortValidation(unittest.TestCase):
     """Tests for gate_port validation in config loading."""
