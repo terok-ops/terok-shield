@@ -56,7 +56,7 @@ Each `apply_hook()` step produces a separate entry:
 ```
 
 Detail lines prefixed with `[ips]` contain full IP lists. The `"note"` action
-is used for RFC1918 allowlisting events. Audit logging is best-effort — failures
+is used for RFC1918 and link-local allowlisting events. Audit logging is best-effort — failures
 are silently ignored to avoid blocking container operations.
 
 ### Kernel per-packet logs

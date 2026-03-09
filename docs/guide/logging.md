@@ -5,7 +5,7 @@ logs and kernel-level per-packet nftables logs.
 
 ## Application logs (JSON-lines)
 
-Hook lifecycle events are logged to `~/.local/state/terok-shield/logs/<container>.jsonl`.
+Firewall events are logged to `~/.local/state/terok-shield/logs/<container>.jsonl`.
 
 Each line is a JSON object:
 

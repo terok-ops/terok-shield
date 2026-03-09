@@ -88,7 +88,7 @@ podman run --rm -it \
 ```
 
 The container starts with a default-deny firewall — only destinations in the
-`dev-standard` profile are reachable.
+`dev-standard` and `my-project` profiles are reachable.
 
 ### 4. Allow a domain at runtime
 

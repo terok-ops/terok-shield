@@ -104,9 +104,9 @@ Breaking this down:
 5. If any step fails, the container is torn down (fail-closed)
 
 From inside the container, only the allowed destinations are reachable.
-All other outbound traffic is dropped. Allowlisting RFC1918 addresses
-(private networks) or large CIDRs generates a special notice in the audit
-log.
+All other outbound traffic is dropped. Allowlisting RFC1918 (private
+networks), link-local addresses, or large CIDRs generates a notice in
+the audit log.
 
 ## Allow or deny destinations at runtime
 
