@@ -139,6 +139,11 @@ class TestAPISurface(unittest.TestCase):
 
         cases = [
             (
+                terok_shield.configure_audit,
+                [("enabled", KW, empty, bool)],
+                None,
+            ),
+            (
                 terok_shield.shield_setup,
                 [("config", KW, None, cfg_or_none)],
                 None,
