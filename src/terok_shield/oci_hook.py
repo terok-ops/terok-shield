@@ -17,7 +17,7 @@ import json
 import re
 import sys
 
-from .audit import log_event
+from .audit import configure_audit, log_event
 from .config import load_shield_config, shield_resolved_dir
 from .nft import add_elements, hook_ruleset, verify_ruleset
 from .run import ExecError, nft_via_nsenter
@@ -204,6 +204,7 @@ def hook_main(stdin_data: str | None = None, stage: str = "createRuntime") -> in
         if not pid:
             raise RuntimeError("Hook mode requires a valid PID in OCI state")
         cfg = load_shield_config()
+        configure_audit(enabled=cfg.audit_enabled)
         apply_hook(container_id, pid, loopback_ports=cfg.loopback_ports)
     except RuntimeError as e:
         print(f"terok-shield hook: {e}", file=sys.stderr)

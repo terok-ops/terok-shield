@@ -21,6 +21,7 @@ EXPECTED_ALL = [
     "ShieldConfig",
     "ShieldMode",
     "ShieldState",
+    "configure_audit",
     "list_log_files",
     "list_profiles",
     "load_shield_config",

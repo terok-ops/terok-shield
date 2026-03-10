@@ -8,7 +8,7 @@ Public API for standalone use and integration with terok.
 
 __version__ = "0.1.1"
 
-from .audit import list_log_files, log_event, tail_log
+from .audit import configure_audit, list_log_files, log_event, tail_log
 from .config import ShieldConfig, ShieldMode, ShieldState, load_shield_config
 from .dns import resolve_and_cache
 from .profiles import compose_profiles, list_profiles
@@ -17,8 +17,16 @@ from .util import is_ipv4 as _is_ip
 
 
 def _load_config(config: ShieldConfig | None) -> ShieldConfig:
-    """Return the given config or load the default."""
-    return config if config is not None else load_shield_config()
+    """Return the given config or load the default.
+
+    Also configures the audit module so that ``log_event`` calls
+    throughout the call chain respect ``audit_enabled`` regardless
+    of whether the config was supplied by an API consumer or loaded
+    from disk.
+    """
+    cfg = config if config is not None else load_shield_config()
+    configure_audit(enabled=cfg.audit_enabled)
+    return cfg
 
 
 def _mode_module(mode: ShieldMode):  # noqa: ANN202 – returns module
@@ -89,8 +97,7 @@ def shield_pre_start(
 
     result = _mode_module(cfg.mode).pre_start(cfg, container, profiles)
 
-    if cfg.audit_enabled:
-        log_event(container, "setup", detail=f"profiles={','.join(profiles)}")
+    log_event(container, "setup", detail=f"profiles={','.join(profiles)}")
     return result
 
 
@@ -121,8 +128,7 @@ def shield_allow(
         try:
             mod.allow_ip(container, ip)
             allowed.append(ip)
-            if cfg.audit_enabled:
-                log_event(container, "allowed", dest=ip, detail=f"target={target}")
+            log_event(container, "allowed", dest=ip, detail=f"target={target}")
         except Exception:
             pass
 
@@ -157,8 +163,7 @@ def shield_deny(
         try:
             mod.deny_ip(container, ip)
             denied.append(ip)
-            if cfg.audit_enabled:
-                log_event(container, "denied", dest=ip, detail=f"target={target}")
+            log_event(container, "denied", dest=ip, detail=f"target={target}")
         except Exception:
             pass
 
@@ -203,9 +208,7 @@ def shield_down(
     mod = _mode_module(cfg.mode)
     mod.shield_down(cfg, container, allow_all=allow_all)
 
-    if cfg.audit_enabled:
-        detail = "allow_all=True" if allow_all else None
-        log_event(container, "shield_down", detail=detail)
+    log_event(container, "shield_down", detail="allow_all=True" if allow_all else None)
 
 
 def shield_up(
@@ -225,8 +228,7 @@ def shield_up(
     mod = _mode_module(cfg.mode)
     mod.shield_up(cfg, container)
 
-    if cfg.audit_enabled:
-        log_event(container, "shield_up")
+    log_event(container, "shield_up")
 
 
 def shield_state(
@@ -305,6 +307,7 @@ __all__ = [
     "ShieldConfig",
     "ShieldMode",
     "ShieldState",
+    "configure_audit",
     "list_log_files",
     "list_profiles",
     "load_shield_config",
