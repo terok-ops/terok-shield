@@ -229,6 +229,22 @@ class TestVerifyRuleset(unittest.TestCase):
         errors = verify_ruleset(bad)
         self.assertTrue(any("misplaced" in e for e in errors))
 
+    def test_missing_output_chain(self) -> None:
+        """Report missing output chain."""
+        errors = verify_ruleset(
+            "chain input { policy drop; meta nfproto ipv6 drop\n"
+            "TEROK_SHIELD_DENIED admin-prohibited }"
+        )
+        self.assertTrue(any("output chain missing" in e for e in errors))
+
+    def test_missing_input_chain(self) -> None:
+        """Report missing input chain."""
+        errors = verify_ruleset(
+            "chain output { policy drop; meta nfproto ipv6 drop\n"
+            "TEROK_SHIELD_DENIED admin-prohibited }"
+        )
+        self.assertTrue(any("input chain missing" in e for e in errors))
+
     def test_rejects_bypass_ruleset(self) -> None:
         """verify_ruleset must reject a bypass ruleset (output policy accept)."""
         rs = bypass_ruleset()
@@ -347,6 +363,22 @@ class TestVerifyBypassRuleset(unittest.TestCase):
         """Report missing bypass log prefix."""
         errors = verify_bypass_ruleset("policy accept policy drop")
         self.assertTrue(any("bypass" in e for e in errors))
+
+    def test_missing_output_chain(self) -> None:
+        """Report missing output chain in bypass verification."""
+        errors = verify_bypass_ruleset(
+            "chain input { policy drop; meta nfproto ipv6 drop\n"
+            "TEROK_SHIELD_BYPASS }"
+        )
+        self.assertTrue(any("output chain missing" in e for e in errors))
+
+    def test_missing_input_chain(self) -> None:
+        """Report missing input chain in bypass verification."""
+        errors = verify_bypass_ruleset(
+            "chain output { policy accept; meta nfproto ipv6 drop\n"
+            "TEROK_SHIELD_BYPASS }"
+        )
+        self.assertTrue(any("input chain missing" in e for e in errors))
 
     def test_rejects_hook_ruleset(self) -> None:
         """verify_bypass_ruleset must reject a hook (enforce) ruleset."""

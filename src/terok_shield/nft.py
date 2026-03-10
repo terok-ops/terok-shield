@@ -233,11 +233,16 @@ def verify_ruleset(nft_output: str) -> list[str]:
     errors: list[str] = []
     if "policy drop" not in nft_output:
         errors.append("policy is not drop")
-    for chain in ("output", "input", "forward"):
-        if f"chain {chain}" in nft_output and not _has_leading_ipv6_drop(
-            nft_output, chain, policy="drop"
-        ):
+    for chain in ("output", "input"):
+        if f"chain {chain}" not in nft_output:
+            errors.append(f"{chain} chain missing")
+            continue
+        if not _has_leading_ipv6_drop(nft_output, chain, policy="drop"):
             errors.append(f"IPv6 drop rule missing or misplaced in {chain} chain")
+    if "chain forward" in nft_output and not _has_leading_ipv6_drop(
+        nft_output, "forward", policy="drop"
+    ):
+        errors.append("IPv6 drop rule missing or misplaced in forward chain")
     if "admin-prohibited" not in nft_output:
         errors.append("reject type missing")
     if "TEROK_SHIELD_DENIED" not in nft_output:
@@ -261,10 +266,11 @@ def verify_bypass_ruleset(nft_output: str) -> list[str]:
     if "policy drop" not in nft_output:
         errors.append("input policy is not drop")
     for chain in ("output", "input"):
+        if f"chain {chain}" not in nft_output:
+            errors.append(f"{chain} chain missing")
+            continue
         expected_policy = "accept" if chain == "output" else "drop"
-        if f"chain {chain}" in nft_output and not _has_leading_ipv6_drop(
-            nft_output, chain, policy=expected_policy
-        ):
+        if not _has_leading_ipv6_drop(nft_output, chain, policy=expected_policy):
             errors.append(f"IPv6 drop rule missing or misplaced in {chain} chain")
     if BYPASS_LOG_PREFIX not in nft_output:
         errors.append("bypass log prefix missing")
