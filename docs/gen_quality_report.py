@@ -257,55 +257,38 @@ def _section_dead_code() -> str:
     return "".join(lines)
 
 
-_CODECOV_TOKEN = "D74Q7lvnIF"
 _CODECOV_REPO = "terok-ai/terok-shield"
-
-
-def _fetch_codecov_treemap() -> str | None:
-    """Fetch the Codecov treemap SVG and patch it for dark-mode compatibility."""
-    from urllib.error import URLError
-    from urllib.request import Request, urlopen
-
-    url = f"https://codecov.io/gh/{_CODECOV_REPO}/graphs/tree.svg?token={_CODECOV_TOKEN}"
-    try:
-        req = Request(url, headers={"User-Agent": "mkdocs-gen-files"})
-        with urlopen(req, timeout=30) as resp:  # noqa: S310  # nosec B310
-            svg = resp.read().decode("utf-8")
-    except (URLError, OSError, UnicodeDecodeError):
-        return None
-
-    # Remove white cell borders so the page background shows through in dark mode.
-    svg = svg.replace('stroke="white"', 'stroke="none"')
-    # Make the SVG responsive instead of fixed 300×300.
-    svg = svg.replace(
-        'width="300" height="300"',
-        'style="max-width:300px;width:100%;height:auto"',
-    )
-    return svg
+_CODECOV_TOKEN = "D74Q7lvnIF"
+_TREEMAP_LOCAL = ROOT / "docs" / "assets" / "coverage_treemap.svg"
 
 
 def _section_test_coverage() -> str:
-    """Generate test coverage section with embedded Codecov treemap."""
+    """Generate test coverage section with Codecov badge and treemap."""
     base = f"https://codecov.io/gh/{_CODECOV_REPO}"
     badge = f"{base}/graph/badge.svg?token={_CODECOV_TOKEN}"
 
-    svg = _fetch_codecov_treemap()
-    if svg:
-        treemap_block = f"{svg}\n\n"
+    if _TREEMAP_LOCAL.is_file():
+        svg = _TREEMAP_LOCAL.read_text(encoding="utf-8")
+        # Write the SVG as a sibling of quality_report/index.html so the
+        # relative reference is just the filename — no ../ gymnastics.
+        with mkdocs_gen_files.open("quality_report/coverage_treemap.svg", "w") as f:
+            f.write(svg)
+        src = "coverage_treemap.svg"
     else:
-        # Fallback: remote image (no hover tooltips, white borders).
-        remote = f"{base}/graphs/tree.svg?token={_CODECOV_TOKEN}"
-        treemap_block = f'<img src="{remote}" style="max-width:100%">\n\n'
+        src = f"{base}/graphs/tree.svg?token={_CODECOV_TOKEN}"
+    # <object> loads the SVG as its own document — no markdown mangling,
+    # and native <title> tooltips work on hover.
+    treemap = f'<object id="codecov-treemap-img" type="image/svg+xml" data="{src}"></object>\n\n'
 
     return (
         f"[![codecov]({badge})]({base})\n\n"
         f"Coverage is collected from unit tests in CI and uploaded to "
         f"[Codecov]({base}).\n\n"
-        f"### Coverage Treemap\n\n"
-        + treemap_block
+        "### Coverage Treemap\n\n"
+        + treemap
         + "Each rectangle represents a source file. Size is proportional to the "
         "number of lines; colour shows the coverage percentage (green = high, "
-        "red = low). Hover over a cell to see the file name.\n"
+        "red = low).\n"
     )
 
 
