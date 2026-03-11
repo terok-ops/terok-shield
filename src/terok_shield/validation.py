@@ -39,3 +39,16 @@ def validate_safe_name(name: str) -> str:
     if not SAFE_NAME.fullmatch(name):
         raise ValueError(f"Unsafe name: {name!r}")
     return name
+
+
+def parse_entries(text: str) -> list[str]:
+    """Parse a text file into a list of non-blank, non-comment lines.
+
+    Strips leading/trailing whitespace from each line.
+    Lines starting with ``#`` (after stripping) are treated as comments.
+    """
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if (stripped := line.strip()) and not stripped.startswith("#")
+    ]

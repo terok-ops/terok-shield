@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Self
 
 from .config import ShieldConfig, shield_profiles_dir
-from .validation import validate_safe_name
+from .validation import parse_entries as _parse_entries, validate_safe_name
 
 _BUNDLED_PACKAGE = "terok_shield.resources.dns"
 
@@ -23,18 +23,6 @@ _BUNDLED_PACKAGE = "terok_shield.resources.dns"
 def _bundled_dir() -> Path:
     """Return the path to the bundled DNS allowlists directory."""
     return Path(str(importlib_resources.files(_BUNDLED_PACKAGE)))
-
-
-def _parse_entries(text: str) -> list[str]:
-    """Parse a profile .txt file into a list of entries.
-
-    Strips comments (lines starting with ``#``) and blank lines.
-    """
-    return [
-        line.strip()
-        for line in text.splitlines()
-        if (stripped := line.strip()) and not stripped.startswith("#")
-    ]
 
 
 # ── ProfileLoader (Repository) ──────────────────────────

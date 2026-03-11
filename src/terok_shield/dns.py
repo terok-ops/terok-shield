@@ -31,15 +31,6 @@ def _split_entries(entries: list[str]) -> tuple[list[str], list[str]]:
     return domains, ips
 
 
-def _parse_entries(text: str) -> list[str]:
-    """Parse a cache/profile file into a list of non-blank, non-comment lines."""
-    return [
-        line.strip()
-        for line in text.splitlines()
-        if (stripped := line.strip()) and not stripped.startswith("#")
-    ]
-
-
 def _cache_fresh(path: Path, max_age: int) -> bool:
     """Return True if the cache file exists and is younger than max_age seconds."""
     try:

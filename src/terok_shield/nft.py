@@ -168,14 +168,9 @@ class RulesetBuilder:
         return safe_ip(value)
 
     @staticmethod
-    def add_elements(set_name: str, ips: list[str], table: str = NFT_TABLE) -> str:
-        """Generate nft command to add validated IPs to a set."""
-        return add_elements(set_name, ips, table)
-
-    @staticmethod
-    def add_elements_dual(ips: list[str], table: str = NFT_TABLE) -> str:
+    def add_elements_dual(ips: list[str]) -> str:
         """Classify IPs by family and generate add-element commands for both sets."""
-        return add_elements_dual(ips, table)
+        return add_elements_dual(ips)
 
 
 # ── Module-level free functions (unchanged API) ──────────
@@ -283,18 +278,38 @@ def bypass_ruleset(
 # ── Set operations ───────────────────────────────────────
 
 
+_SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ALLOW_V4 = "allow_v4"
+_ALLOW_V6 = "allow_v6"
+
+
+def _safe_ident(value: str) -> str:
+    """Validate an nft identifier (table/set name) against injection.
+
+    Raises:
+        ValueError: If the identifier contains unsafe characters.
+    """
+    if not _SAFE_IDENT.fullmatch(value):
+        raise ValueError(f"Unsafe nft identifier: {value!r}")
+    return value
+
+
 def add_elements(set_name: str, ips: list[str], table: str = NFT_TABLE) -> str:
     """Generate nft command to add validated IPs to a set.
 
+    Both ``set_name`` and ``table`` are validated against injection.
     Returns empty string if no valid IPs.
     """
+    _safe_ident(set_name)
+    for part in table.split():
+        _safe_ident(part)
     valid = [safe_ip(ip) for ip in ips if _try_validate(ip)]
     if not valid:
         return ""
     return f"add element {table} {set_name} {{ {', '.join(valid)} }}\n"
 
 
-def add_elements_dual(ips: list[str], table: str = NFT_TABLE) -> str:
+def add_elements_dual(ips: list[str]) -> str:
     """Classify IPs by family and generate add-element commands for both sets.
 
     IPv4 addresses go to ``allow_v4``, IPv6 to ``allow_v6``.
@@ -309,10 +324,10 @@ def add_elements_dual(ips: list[str], table: str = NFT_TABLE) -> str:
             continue
         (v4 if _is_v4(sanitized) else v6).append(sanitized)
     parts: list[str] = []
-    cmd = add_elements("allow_v4", v4, table)
+    cmd = add_elements(_ALLOW_V4, v4)
     if cmd:
         parts.append(cmd)
-    cmd = add_elements("allow_v6", v6, table)
+    cmd = add_elements(_ALLOW_V6, v6)
     if cmd:
         parts.append(cmd)
     return "".join(parts)

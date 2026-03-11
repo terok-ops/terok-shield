@@ -14,7 +14,7 @@ The primary entry point is the ``Shield`` facade class:
 
 from collections.abc import Iterator
 
-__version__ = "0.1.1"
+__version__ = "0.1.3"
 
 from .audit import AuditLogger, configure_audit, list_log_files, log_event, tail_log
 from .config import ShieldConfig, ShieldMode, ShieldPaths, ShieldState, load_shield_config
