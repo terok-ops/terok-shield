@@ -3,6 +3,7 @@
 
 """Tests for the HookExecutor class (OOP API)."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from unittest import mock
 from terok_shield.oci_hook import HookExecutor
 from terok_shield.run import ExecError
 
+from ..testfs import FAKE_RESOLVED_DIR, FORBIDDEN_TRAVERSAL
 from ..testnet import RFC1918_HOST, TEST_IP1, TEST_IP2
 
 
@@ -22,7 +24,7 @@ class TestHookExecutorInit(unittest.TestCase):
         runner = mock.MagicMock()
         audit = mock.MagicMock()
         ruleset = mock.MagicMock()
-        resolved_dir = Path("/tmp/resolved")
+        resolved_dir = FAKE_RESOLVED_DIR
 
         executor = HookExecutor(
             runner=runner,
@@ -87,7 +89,7 @@ class TestHookExecutorApply(unittest.TestCase):
             self.assertEqual(runner.nft_via_nsenter.call_count, 3)
 
     def test_fail_closed_on_apply_error(self) -> None:
-        """Raise RuntimeError if ruleset application fails."""
+        """Raise RuntimeError and short-circuit if ruleset application fails."""
         with tempfile.TemporaryDirectory() as tmp:
             runner = mock.MagicMock()
             runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "permission denied")
@@ -103,6 +105,10 @@ class TestHookExecutorApply(unittest.TestCase):
             )
             with self.assertRaises(RuntimeError):
                 executor.apply("test-ctr", "42")
+
+            # Verify short-circuit: nft called once (apply), verify never reached
+            runner.nft_via_nsenter.assert_called_once()
+            ruleset.verify_hook.assert_not_called()
 
     def test_fail_closed_on_verify_error(self) -> None:
         """Raise RuntimeError if verification fails."""
@@ -146,7 +152,7 @@ class TestHookExecutorReadResolvedIps(unittest.TestCase):
     def test_rejects_path_traversal(self) -> None:
         """Return empty list for names with path traversal."""
         executor = _make_executor()
-        self.assertEqual(executor._read_resolved_ips("../etc/passwd"), [])
+        self.assertEqual(executor._read_resolved_ips(FORBIDDEN_TRAVERSAL), [])
 
     def test_skips_blank_lines(self) -> None:
         """Skip blank lines in resolved file."""
@@ -198,11 +204,7 @@ class TestHookExecutorParseOciState(unittest.TestCase):
 
     def test_valid_state(self) -> None:
         """Parse valid OCI state via the class method."""
-        import json
-
-        cid, pid, annotations = HookExecutor.parse_oci_state(
-            json.dumps({"id": "abc123", "pid": 42})
-        )
+        cid, pid, _ = HookExecutor.parse_oci_state(json.dumps({"id": "abc123", "pid": 42}))
         self.assertEqual(cid, "abc123")
         self.assertEqual(pid, "42")
 
@@ -258,9 +260,29 @@ class TestHookExecutorCacheReadError(unittest.TestCase):
             runner=runner,
             audit=audit,
             ruleset=ruleset,
-            resolved_dir=Path("/tmp"),
+            resolved_dir=FAKE_RESOLVED_DIR,
         )
         with mock.patch.object(executor, "_read_resolved_ips", side_effect=OSError("disk fail")):
+            with self.assertRaises(RuntimeError):
+                executor.apply("test-ctr", "42")
+
+    def test_unicodeerror_raises_runtime(self) -> None:
+        """UnicodeError reading resolved cache raises RuntimeError."""
+        runner = mock.MagicMock()
+        runner.nft_via_nsenter.return_value = ""
+        audit = mock.MagicMock()
+        ruleset = mock.MagicMock()
+        ruleset.build_hook.return_value = "hook"
+
+        executor = HookExecutor(
+            runner=runner,
+            audit=audit,
+            ruleset=ruleset,
+            resolved_dir=FAKE_RESOLVED_DIR,
+        )
+        with mock.patch.object(
+            executor, "_read_resolved_ips", side_effect=UnicodeError("bad encoding")
+        ):
             with self.assertRaises(RuntimeError):
                 executor.apply("test-ctr", "42")
 
@@ -280,5 +302,5 @@ def _make_executor(
         runner=runner or mock.MagicMock(),
         audit=audit or mock.MagicMock(),
         ruleset=ruleset or mock.MagicMock(),
-        resolved_dir=resolved_dir or Path("/tmp/resolved"),
+        resolved_dir=resolved_dir or FAKE_RESOLVED_DIR,
     )

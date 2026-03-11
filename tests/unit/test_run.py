@@ -18,6 +18,7 @@ from terok_shield.run import (
     run,
 )
 
+from ..testfs import NFT_BINARY
 from ..testnet import (
     ALIAS_DOMAIN,
     IPV6_CLOUDFLARE,
@@ -86,7 +87,7 @@ class TestRun(unittest.TestCase):
 class TestHas(unittest.TestCase):
     """Tests for has()."""
 
-    @unittest.mock.patch("shutil.which", return_value="/usr/bin/nft")
+    @unittest.mock.patch("shutil.which", return_value=NFT_BINARY)
     def test_found(self, _: unittest.mock.Mock) -> None:
         """Return True when executable is found."""
         self.assertTrue(has("nft"))

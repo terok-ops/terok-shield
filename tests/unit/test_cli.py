@@ -3,11 +3,16 @@
 
 """Tests for the CLI entry point."""
 
+import io
+import json
+import sys
 import unittest
 from unittest import mock
 
-from terok_shield import ExecError
+from terok_shield import ExecError, ShieldState
 from terok_shield.cli import _build_parser, main
+
+from ..testnet import TEST_DOMAIN, TEST_IP1
 
 
 class TestBuildParser(unittest.TestCase):
@@ -145,7 +150,7 @@ class TestMainDispatch(unittest.TestCase):
     @mock.patch("terok_shield.cli.shield_resolve")
     def test_resolve(self, mock_resolve):
         """CLI resolve calls shield_resolve."""
-        mock_resolve.return_value = ["192.0.2.1"]
+        mock_resolve.return_value = [TEST_IP1]
         main(["resolve", "test"])
         mock_resolve.assert_called_once_with("test", force=False)
 
@@ -159,23 +164,21 @@ class TestMainDispatch(unittest.TestCase):
     @mock.patch("terok_shield.cli.shield_allow")
     def test_allow(self, mock_allow):
         """CLI allow calls shield_allow."""
-        mock_allow.return_value = ["192.0.2.1"]
-        main(["allow", "test", "192.0.2.1"])
-        mock_allow.assert_called_once_with("test", "192.0.2.1")
+        mock_allow.return_value = [TEST_IP1]
+        main(["allow", "test", TEST_IP1])
+        mock_allow.assert_called_once_with("test", TEST_IP1)
 
     @mock.patch("terok_shield.cli.shield_deny")
     def test_deny(self, mock_deny):
         """CLI deny calls shield_deny."""
-        mock_deny.return_value = ["192.0.2.1"]
-        main(["deny", "test", "192.0.2.1"])
-        mock_deny.assert_called_once_with("test", "192.0.2.1")
+        mock_deny.return_value = [TEST_IP1]
+        main(["deny", "test", TEST_IP1])
+        mock_deny.assert_called_once_with("test", TEST_IP1)
 
     @mock.patch("terok_shield.cli.shield_state")
     @mock.patch("terok_shield.cli.shield_rules")
     def test_rules(self, mock_rules, mock_state):
         """CLI rules calls shield_rules."""
-        from terok_shield import ShieldState
-
         mock_state.return_value = ShieldState.UP
         mock_rules.return_value = "table inet terok_shield {}"
         main(["rules", "test"])
@@ -237,9 +240,6 @@ class TestMainOutputFormatting(unittest.TestCase):
             "profiles": ["dev-standard"],
             "log_files": ["ctr1"],
         }
-        import io
-        import sys
-
         captured = io.StringIO()
         sys.stdout = captured
         try:
@@ -262,9 +262,6 @@ class TestMainOutputFormatting(unittest.TestCase):
             "profiles": [],
             "log_files": [],
         }
-        import io
-        import sys
-
         captured = io.StringIO()
         sys.stdout = captured
         try:
@@ -280,26 +277,21 @@ class TestMainOutputFormatting(unittest.TestCase):
     def test_allow_no_ips_exits_1(self, _allow) -> None:
         """CLI allow exits 1 when no IPs are allowed."""
         with self.assertRaises(SystemExit) as ctx:
-            main(["allow", "test", "example.com"])
+            main(["allow", "test", TEST_DOMAIN])
         self.assertEqual(ctx.exception.code, 1)
 
     @mock.patch("terok_shield.cli.shield_deny", return_value=[])
     def test_deny_no_ips_exits_1(self, _deny) -> None:
         """CLI deny exits 1 when no IPs are denied."""
         with self.assertRaises(SystemExit) as ctx:
-            main(["deny", "test", "example.com"])
+            main(["deny", "test", TEST_DOMAIN])
         self.assertEqual(ctx.exception.code, 1)
 
     @mock.patch("terok_shield.cli.shield_state")
     @mock.patch("terok_shield.cli.shield_rules", return_value="")
     def test_rules_no_rules(self, _rules, mock_state) -> None:
         """CLI rules prints 'No rules found' for empty output."""
-        from terok_shield import ShieldState
-
         mock_state.return_value = ShieldState.INACTIVE
-        import io
-        import sys
-
         captured = io.StringIO()
         sys.stdout = captured
         try:
@@ -313,9 +305,6 @@ class TestMainOutputFormatting(unittest.TestCase):
     @mock.patch("terok_shield.cli.list_log_files", return_value=[])
     def test_logs_no_files(self, _files, _tail) -> None:
         """CLI logs prints 'No audit logs found' when no files."""
-        import io
-        import sys
-
         captured = io.StringIO()
         sys.stdout = captured
         try:
@@ -329,10 +318,6 @@ class TestMainOutputFormatting(unittest.TestCase):
     def test_logs_with_container(self, mock_tail) -> None:
         """CLI logs with --container prints entries as JSON."""
         mock_tail.return_value = iter([{"action": "setup"}])
-        import io
-        import json
-        import sys
-
         captured = io.StringIO()
         sys.stdout = captured
         try:

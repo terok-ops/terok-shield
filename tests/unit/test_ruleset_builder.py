@@ -8,7 +8,7 @@ import unittest
 from terok_shield.nft import RulesetBuilder
 from terok_shield.nft_constants import BYPASS_LOG_PREFIX
 
-from ..testnet import IPV6_CLOUDFLARE, LINK_LOCAL_DNS, TEST_IP1, TEST_IP2
+from ..testnet import EXPECTED_PRIVATE_RANGES, IPV6_CLOUDFLARE, LINK_LOCAL_DNS, TEST_IP1, TEST_IP2
 
 
 class TestRulesetBuilderInit(unittest.TestCase):
@@ -83,7 +83,7 @@ class TestRulesetBuilderBuildBypass(unittest.TestCase):
         """Bypass with allow_all omits private-range rules."""
         builder = RulesetBuilder()
         rs = builder.build_bypass(allow_all=True)
-        self.assertNotIn("10.0.0.0/8", rs)
+        self.assertNotIn(EXPECTED_PRIVATE_RANGES[0], rs)  # 10.0.0.0/8
 
 
 class TestRulesetBuilderVerify(unittest.TestCase):

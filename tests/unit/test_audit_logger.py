@@ -7,10 +7,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from terok_shield.audit import AuditLogger
 from terok_shield.config import ShieldConfig
 
+from ..testfs import FAKE_LOGS_DIR, FORBIDDEN_TRAVERSAL, NONEXISTENT_DIR
 from ..testnet import TEST_IP1
 
 
@@ -19,7 +21,7 @@ class TestAuditLoggerInit(unittest.TestCase):
 
     def test_direct_init(self) -> None:
         """Construct with explicit logs_dir and enabled flag."""
-        logger = AuditLogger(logs_dir=Path("/tmp/test"), enabled=False)
+        logger = AuditLogger(logs_dir=FAKE_LOGS_DIR, enabled=False)
         self.assertFalse(logger.enabled)
 
     def test_from_config(self) -> None:
@@ -31,7 +33,7 @@ class TestAuditLoggerInit(unittest.TestCase):
 
     def test_default_enabled(self) -> None:
         """Default enabled is True."""
-        logger = AuditLogger(logs_dir=Path("/tmp/test"))
+        logger = AuditLogger(logs_dir=FAKE_LOGS_DIR)
         self.assertTrue(logger.enabled)
 
 
@@ -40,7 +42,7 @@ class TestAuditLoggerEnabledToggle(unittest.TestCase):
 
     def test_toggle_enabled(self) -> None:
         """Can toggle enabled on and off."""
-        logger = AuditLogger(logs_dir=Path("/tmp/test"), enabled=True)
+        logger = AuditLogger(logs_dir=FAKE_LOGS_DIR, enabled=True)
         self.assertTrue(logger.enabled)
         logger.enabled = False
         self.assertFalse(logger.enabled)
@@ -87,13 +89,15 @@ class TestAuditLoggerLogEvent(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             logger = AuditLogger(logs_dir=Path(tmp))
             with self.assertRaises(ValueError):
-                logger.log_event("../etc/passwd", "setup")
+                logger.log_event(FORBIDDEN_TRAVERSAL, "setup")
 
-    def test_silently_ignores_write_error(self) -> None:
+    @mock.patch("pathlib.Path.open", side_effect=OSError("disk full"))
+    def test_silently_ignores_write_error(self, _open: mock.Mock) -> None:
         """OSError during write is silently ignored."""
-        logger = AuditLogger(logs_dir=Path("/nonexistent/readonly/path"))
-        # Should not raise
-        logger.log_event("test-ctr", "setup")
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = AuditLogger(logs_dir=Path(tmp))
+            # Should not raise
+            logger.log_event("test-ctr", "setup")
 
     def test_multiple_events_appended(self) -> None:
         """Multiple events append to the same file."""
@@ -161,5 +165,5 @@ class TestAuditLoggerListLogFiles(unittest.TestCase):
 
     def test_empty_when_dir_missing(self) -> None:
         """Return empty list when logs directory does not exist."""
-        logger = AuditLogger(logs_dir=Path("/nonexistent/logs"))
+        logger = AuditLogger(logs_dir=NONEXISTENT_DIR / "logs")
         self.assertEqual(logger.list_log_files(), [])

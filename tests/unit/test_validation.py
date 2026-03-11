@@ -13,6 +13,9 @@ from terok_shield.validation import (
     validate_safe_name,
 )
 
+from ..testfs import FORBIDDEN_ABSOLUTE, FORBIDDEN_TRAVERSAL
+from ..testnet import TEST_DOMAIN, TEST_DOMAIN2, TEST_IP1
+
 
 class TestValidateContainerName(unittest.TestCase):
     """Tests for validate_container_name."""
@@ -37,7 +40,7 @@ class TestValidateContainerName(unittest.TestCase):
     def test_rejects_path_traversal(self) -> None:
         """Reject path traversal."""
         with self.assertRaises(ValueError):
-            validate_container_name("../etc/passwd")
+            validate_container_name(FORBIDDEN_TRAVERSAL)
 
     def test_rejects_slash(self) -> None:
         """Reject names with slashes."""
@@ -47,7 +50,7 @@ class TestValidateContainerName(unittest.TestCase):
     def test_rejects_absolute_path(self) -> None:
         """Reject absolute paths."""
         with self.assertRaises(ValueError):
-            validate_container_name("/etc/passwd")
+            validate_container_name(FORBIDDEN_ABSOLUTE)
 
     def test_rejects_space(self) -> None:
         """Reject names with spaces."""
@@ -95,7 +98,7 @@ class TestValidateSafeName(unittest.TestCase):
     def test_rejects_path_traversal(self) -> None:
         """Reject path traversal."""
         with self.assertRaises(ValueError):
-            validate_safe_name("../etc/passwd")
+            validate_safe_name(FORBIDDEN_TRAVERSAL)
 
 
 class TestParseEntries(unittest.TestCase):
@@ -103,23 +106,23 @@ class TestParseEntries(unittest.TestCase):
 
     def test_basic_lines(self) -> None:
         """Parse simple domain/IP lines."""
-        text = "example.com\n192.0.2.1\n"
-        self.assertEqual(parse_entries(text), ["example.com", "192.0.2.1"])
+        text = f"{TEST_DOMAIN}\n{TEST_IP1}\n"
+        self.assertEqual(parse_entries(text), [TEST_DOMAIN, TEST_IP1])
 
     def test_comments_stripped(self) -> None:
         """Skip comment lines."""
-        text = "# comment\nexample.com\n# another\ntest.org\n"
-        self.assertEqual(parse_entries(text), ["example.com", "test.org"])
+        text = f"# comment\n{TEST_DOMAIN}\n# another\n{TEST_DOMAIN2}\n"
+        self.assertEqual(parse_entries(text), [TEST_DOMAIN, TEST_DOMAIN2])
 
     def test_blank_lines(self) -> None:
         """Skip blank lines."""
-        text = "\nexample.com\n\n\ntest.org\n"
-        self.assertEqual(parse_entries(text), ["example.com", "test.org"])
+        text = f"\n{TEST_DOMAIN}\n\n\n{TEST_DOMAIN2}\n"
+        self.assertEqual(parse_entries(text), [TEST_DOMAIN, TEST_DOMAIN2])
 
     def test_whitespace_stripped(self) -> None:
         """Strip whitespace from entries."""
-        text = "  example.com  \n  test.org  \n"
-        self.assertEqual(parse_entries(text), ["example.com", "test.org"])
+        text = f"  {TEST_DOMAIN}  \n  {TEST_DOMAIN2}  \n"
+        self.assertEqual(parse_entries(text), [TEST_DOMAIN, TEST_DOMAIN2])
 
     def test_empty(self) -> None:
         """Empty text returns empty list."""
@@ -127,8 +130,8 @@ class TestParseEntries(unittest.TestCase):
 
     def test_comment_after_whitespace(self) -> None:
         """Comment after whitespace is still stripped."""
-        text = "  # indented comment\nexample.com\n"
-        self.assertEqual(parse_entries(text), ["example.com"])
+        text = f"  # indented comment\n{TEST_DOMAIN}\n"
+        self.assertEqual(parse_entries(text), [TEST_DOMAIN])
 
 
 class TestRegexPatterns(unittest.TestCase):

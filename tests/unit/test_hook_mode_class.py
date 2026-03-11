@@ -14,6 +14,7 @@ from terok_shield.mode_hook import HookMode
 from terok_shield.nft import bypass_ruleset, hook_ruleset
 from terok_shield.run import ExecError
 
+from ..testfs import NONEXISTENT_DIR
 from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1
 
 
@@ -69,15 +70,14 @@ class TestHookModeSetup(unittest.TestCase):
 
     def test_installs_hooks(self) -> None:
         """setup() calls install_hooks with config paths."""
-        with tempfile.TemporaryDirectory():
-            config = ShieldConfig()
-            mode = _make_hook_mode(config=config)
-            with mock.patch("terok_shield.mode_hook.install_hooks") as mock_install:
-                mode.setup()
-                mock_install.assert_called_once_with(
-                    hook_entrypoint=config.paths.hook_entrypoint,
-                    hooks_dir=config.paths.hooks_dir,
-                )
+        config = ShieldConfig()
+        mode = _make_hook_mode(config=config)
+        with mock.patch("terok_shield.mode_hook.install_hooks") as mock_install:
+            mode.setup()
+            mock_install.assert_called_once_with(
+                hook_entrypoint=config.paths.hook_entrypoint,
+                hooks_dir=config.paths.hooks_dir,
+            )
 
 
 class TestHookModePreStart(unittest.TestCase):
@@ -129,8 +129,8 @@ class TestHookModePreStart(unittest.TestCase):
         """Pre-start raises RuntimeError if hook not installed."""
         config = ShieldConfig(
             paths=mock.MagicMock(
-                hooks_dir=Path("/nonexistent"),
-                hook_entrypoint=Path("/nonexistent/ep"),
+                hooks_dir=NONEXISTENT_DIR,
+                hook_entrypoint=NONEXISTENT_DIR / "ep",
             ),
         )
         mode = _make_hook_mode(config=config)

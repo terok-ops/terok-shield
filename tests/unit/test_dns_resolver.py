@@ -12,12 +12,14 @@ from unittest import mock
 from terok_shield.config import ShieldConfig
 from terok_shield.dns import DnsResolver
 
+from ..testfs import FAKE_RESOLVED_DIR, FORBIDDEN_TRAVERSAL, NONEXISTENT_DIR
 from ..testnet import (
     CLOUDFLARE_DOMAIN,
     GOOGLE_DNS_DOMAIN,
     IPV6_CLOUDFLARE,
     NONEXISTENT_DOMAIN,
     TEST_DOMAIN,
+    TEST_DOMAIN2,
     TEST_IP1,
     TEST_IP2,
 )
@@ -29,8 +31,8 @@ class TestDnsResolverInit(unittest.TestCase):
     def test_direct_init(self) -> None:
         """Construct with explicit resolved_dir and runner."""
         runner = mock.MagicMock()
-        resolver = DnsResolver(resolved_dir=Path("/tmp/resolved"), runner=runner)
-        self.assertEqual(resolver._resolved_dir, Path("/tmp/resolved"))
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
+        self.assertEqual(resolver._resolved_dir, FAKE_RESOLVED_DIR)
         self.assertIs(resolver._runner, runner)
 
     def test_from_config(self) -> None:
@@ -47,16 +49,16 @@ class TestDnsResolverCachePath(unittest.TestCase):
     def test_valid_name(self) -> None:
         """Accept valid container names."""
         runner = mock.MagicMock()
-        resolver = DnsResolver(resolved_dir=Path("/tmp/resolved"), runner=runner)
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
         path = resolver._cache_path("my-container")
         self.assertEqual(path.name, "my-container.resolved")
 
     def test_rejects_path_traversal(self) -> None:
         """Reject path traversal names."""
         runner = mock.MagicMock()
-        resolver = DnsResolver(resolved_dir=Path("/tmp/resolved"), runner=runner)
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
         with self.assertRaises(ValueError):
-            resolver._cache_path("../etc/passwd")
+            resolver._cache_path(FORBIDDEN_TRAVERSAL)
 
 
 class TestDnsResolverCache(unittest.TestCase):
@@ -65,8 +67,8 @@ class TestDnsResolverCache(unittest.TestCase):
     def test_read_cache_missing_file(self) -> None:
         """Return empty list for missing cache file."""
         runner = mock.MagicMock()
-        resolver = DnsResolver(resolved_dir=Path("/tmp/resolved"), runner=runner)
-        result = resolver._read_cache(Path("/nonexistent/file.resolved"))
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
+        result = resolver._read_cache(NONEXISTENT_DIR / "file.resolved")
         self.assertEqual(result, [])
 
     def test_read_write_roundtrip(self) -> None:
@@ -105,7 +107,7 @@ class TestDnsResolverResolveDomains(unittest.TestCase):
         """Resolve multiple domains and deduplicate."""
         runner = mock.MagicMock()
         runner.dig_all.side_effect = [[TEST_IP1, IPV6_CLOUDFLARE], [TEST_IP2]]
-        resolver = DnsResolver(resolved_dir=Path("/tmp"), runner=runner)
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
 
         result = resolver.resolve_domains([CLOUDFLARE_DOMAIN, GOOGLE_DNS_DOMAIN])
         self.assertEqual(result, [TEST_IP1, IPV6_CLOUDFLARE, TEST_IP2])
@@ -114,16 +116,16 @@ class TestDnsResolverResolveDomains(unittest.TestCase):
         """Duplicate IPs across domains are deduplicated."""
         runner = mock.MagicMock()
         runner.dig_all.side_effect = [[TEST_IP1], [TEST_IP1, TEST_IP2]]
-        resolver = DnsResolver(resolved_dir=Path("/tmp"), runner=runner)
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
 
-        result = resolver.resolve_domains(["a.example.com", "b.example.com"])
+        result = resolver.resolve_domains([TEST_DOMAIN, TEST_DOMAIN2])
         self.assertEqual(result, [TEST_IP1, TEST_IP2])
 
     def test_logs_warning_for_unresolvable(self) -> None:
         """Log warning when a domain resolves to no IPs."""
         runner = mock.MagicMock()
         runner.dig_all.side_effect = [[TEST_IP1], []]
-        resolver = DnsResolver(resolved_dir=Path("/tmp"), runner=runner)
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
 
         with self.assertLogs("terok_shield.dns", level="WARNING") as cm:
             resolver.resolve_domains([CLOUDFLARE_DOMAIN, NONEXISTENT_DOMAIN])
@@ -133,7 +135,7 @@ class TestDnsResolverResolveDomains(unittest.TestCase):
     def test_empty_input(self) -> None:
         """Empty domain list returns empty result."""
         runner = mock.MagicMock()
-        resolver = DnsResolver(resolved_dir=Path("/tmp"), runner=runner)
+        resolver = DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=runner)
         result = resolver.resolve_domains([])
         self.assertEqual(result, [])
         runner.dig_all.assert_not_called()
