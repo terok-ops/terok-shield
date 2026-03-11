@@ -34,6 +34,7 @@ from terok_shield.mode_hook import (
 )
 from terok_shield.nft import bypass_ruleset, hook_ruleset
 from terok_shield.nft_constants import PRIVATE_RANGES
+from terok_shield.run import ExecError
 
 from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1
 
@@ -398,6 +399,15 @@ class TestListRules(unittest.TestCase):
         self.assertIn("terok_shield", result)
         mock_nsenter.assert_called_once()
 
+    @mock.patch(
+        "terok_shield.mode_hook.nft_via_nsenter",
+        side_effect=ExecError(["podman", "inspect"], 125, "no such container"),
+    )
+    def test_returns_empty_on_exec_error(self, _nsenter):
+        """list_rules returns empty string when container doesn't exist."""
+        result = list_rules("nonexistent")
+        self.assertEqual(result, "")
+
 
 class TestShieldDown(unittest.TestCase):
     """Test shield_down bypass mode."""
@@ -560,6 +570,14 @@ class TestShieldState(unittest.TestCase):
     def test_empty_output_is_inactive(self, _nsenter):
         """Empty nft output means INACTIVE."""
         self.assertEqual(shield_state("test"), ShieldState.INACTIVE)
+
+    @mock.patch(
+        "terok_shield.mode_hook.nft_via_nsenter",
+        side_effect=ExecError(["podman", "inspect"], 125, "no such container"),
+    )
+    def test_nonexistent_container_is_inactive(self, _nsenter):
+        """Nonexistent container returns INACTIVE (not an exception)."""
+        self.assertEqual(shield_state("nonexistent"), ShieldState.INACTIVE)
 
     @mock.patch("terok_shield.mode_hook.nft_via_nsenter")
     def test_hook_ruleset_is_up(self, mock_nsenter):

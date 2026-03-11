@@ -36,7 +36,7 @@ from .nft import (
     verify_ruleset,
 )
 from .profiles import compose_profiles
-from .run import nft_via_nsenter, podman_inspect, run as run_cmd
+from .run import ExecError, nft_via_nsenter, podman_inspect, run as run_cmd
 from .util import is_ipv4
 
 
@@ -251,14 +251,17 @@ def list_rules(container: str) -> str:
     Returns:
         The nft ruleset output, or empty string on failure.
     """
-    return nft_via_nsenter(
-        container,
-        "list",
-        "table",
-        "inet",
-        "terok_shield",
-        check=False,
-    )
+    try:
+        return nft_via_nsenter(
+            container,
+            "list",
+            "table",
+            "inet",
+            "terok_shield",
+            check=False,
+        )
+    except ExecError:
+        return ""
 
 
 def shield_down(config: ShieldConfig, container: str, *, allow_all: bool = False) -> None:
