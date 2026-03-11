@@ -25,3 +25,17 @@ class TestCLIErrors:
         with pytest.raises(SystemExit) as exc_info:
             main(["allow", bogus, TEST_IP1])
         assert exc_info.value.code == 1
+
+    def test_cli_down_bad_container(self, shield_env: Path) -> None:
+        """``down`` on a nonexistent container exits 1."""
+        bogus = f"nonexistent-{uuid.uuid4().hex[:12]}"
+        with pytest.raises(SystemExit) as exc_info:
+            main(["down", bogus])
+        assert exc_info.value.code == 1
+
+    def test_cli_up_bad_container(self, shield_env: Path) -> None:
+        """``up`` on a nonexistent container exits 1."""
+        bogus = f"nonexistent-{uuid.uuid4().hex[:12]}"
+        with pytest.raises(SystemExit) as exc_info:
+            main(["up", bogus])
+        assert exc_info.value.code == 1
