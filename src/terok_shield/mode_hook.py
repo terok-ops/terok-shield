@@ -19,6 +19,7 @@ import os
 import shlex
 import stat
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import (
@@ -44,6 +45,7 @@ from .nft import (
 from .profiles import compose_profiles
 from .run import ExecError, nft_via_nsenter, podman_inspect, run as run_cmd
 from .util import is_ipv4
+from .validation import SAFE_NAME
 
 if TYPE_CHECKING:
     from .audit import AuditLogger
@@ -116,21 +118,29 @@ def _generate_hook_json(entrypoint: str, stage: str) -> str:
     return json.dumps(hook, indent=2) + "\n"
 
 
-def install_hooks() -> None:
+def install_hooks(
+    *,
+    hook_entrypoint: Path | None = None,
+    hooks_dir: Path | None = None,
+) -> None:
     """Install OCI hook entrypoint and hook JSON files.
 
     Installs hooks for the ``createRuntime`` and ``poststop`` stages.
+
+    Args:
+        hook_entrypoint: Path for the entrypoint script (default: from env).
+        hooks_dir: Directory for hook JSON files (default: from env).
     """
     ensure_shield_dirs()
 
-    ep = shield_hook_entrypoint()
+    ep = hook_entrypoint or shield_hook_entrypoint()
     ep.write_text(_generate_entrypoint())
     ep.chmod(ep.stat().st_mode | stat.S_IEXEC)
 
-    hooks_dir = shield_hooks_dir()
+    hd = hooks_dir or shield_hooks_dir()
     for stage in ("createRuntime", "poststop"):
         hook_json = _generate_hook_json(str(ep), stage)
-        (hooks_dir / f"terok-shield-{stage}.json").write_text(hook_json)
+        (hd / f"terok-shield-{stage}.json").write_text(hook_json)
 
 
 # ── HookMode (Strategy) ─────────────────────────────────
@@ -175,7 +185,10 @@ class HookMode:
 
     def setup(self) -> None:
         """Install OCI hook JSON and entrypoint script."""
-        install_hooks()
+        install_hooks(
+            hook_entrypoint=self._config.paths.hook_entrypoint,
+            hooks_dir=self._config.paths.hooks_dir,
+        )
 
     def pre_start(self, container: str, profiles: list[str]) -> list[str]:
         """Prepare for container start in hook mode.
@@ -307,8 +320,11 @@ class HookMode:
         self._runner.nft_via_nsenter(container, stdin=stdin)
 
         name = self._resolve_container_name(container)
-        resolved_file = self._config.paths.resolved_dir / f"{name}.resolved"
-        if resolved_file.is_file():
+        if SAFE_NAME.fullmatch(name):
+            resolved_file = self._config.paths.resolved_dir / f"{name}.resolved"
+        else:
+            resolved_file = None
+        if resolved_file and resolved_file.is_file():
             ips = [line.strip() for line in resolved_file.read_text().splitlines() if line.strip()]
             elements_cmd = self._ruleset.add_elements_dual(ips)
             if elements_cmd:
@@ -547,8 +563,11 @@ def shield_up(config: ShieldConfig, container: str) -> None:
     nft_via_nsenter(container, stdin=stdin)
 
     name = _resolve_container_name(container)
-    resolved_file = shield_resolved_dir() / f"{name}.resolved"
-    if resolved_file.is_file():
+    if SAFE_NAME.fullmatch(name):
+        resolved_file = shield_resolved_dir() / f"{name}.resolved"
+    else:
+        resolved_file = None
+    if resolved_file and resolved_file.is_file():
         ips = [line.strip() for line in resolved_file.read_text().splitlines() if line.strip()]
         elements_cmd = add_elements_dual(ips)
         if elements_cmd:

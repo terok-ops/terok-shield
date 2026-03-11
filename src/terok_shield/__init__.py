@@ -103,7 +103,7 @@ class Shield:
 
     def allow(self, container: str, target: str) -> list[str]:
         """Live-allow a domain or IP for a running container."""
-        ips = [target] if _is_ip(target) else self.runner.dig_all(target)
+        ips = [target] if _is_ip(target) else self.dns.resolve_domains([target])
         allowed: list[str] = []
         for ip in ips:
             try:
@@ -116,7 +116,7 @@ class Shield:
 
     def deny(self, container: str, target: str) -> list[str]:
         """Live-deny a domain or IP for a running container."""
-        ips = [target] if _is_ip(target) else self.runner.dig_all(target)
+        ips = [target] if _is_ip(target) else self.dns.resolve_domains([target])
         denied: list[str] = []
         for ip in ips:
             try:

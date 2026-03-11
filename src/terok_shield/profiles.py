@@ -120,22 +120,9 @@ class ProfileLoader:
 # ── Module-level free functions (backwards compat) ───────
 
 
-def _find_profile(name: str) -> Path | None:
-    """Find a profile file by name.  User profiles override bundled ones.
-
-    Returns None for names containing path separators or traversal sequences.
-    """
-    try:
-        validate_safe_name(name)
-    except ValueError:
-        return None
-    user_path = shield_profiles_dir() / f"{name}.txt"
-    if user_path.is_file():
-        return user_path
-    bundled_path = _bundled_dir() / f"{name}.txt"
-    if bundled_path.is_file():
-        return bundled_path
-    return None
+def _default_loader() -> ProfileLoader:
+    """Return a ProfileLoader using environment-derived paths."""
+    return ProfileLoader(user_dir=shield_profiles_dir())
 
 
 def load_profile(name: str) -> list[str]:
@@ -147,10 +134,7 @@ def load_profile(name: str) -> list[str]:
     Raises:
         FileNotFoundError: If the profile does not exist.
     """
-    path = _find_profile(name)
-    if path is None:
-        raise FileNotFoundError(f"Profile not found: {name!r}")
-    return _parse_entries(path.read_text())
+    return _default_loader().load_profile(name)
 
 
 def compose_profiles(names: list[str]) -> list[str]:
@@ -161,20 +145,9 @@ def compose_profiles(names: list[str]) -> list[str]:
     Raises:
         FileNotFoundError: If any named profile does not exist.
     """
-    seen: set[str] = set()
-    result: list[str] = []
-    for name in names:
-        for entry in load_profile(name):
-            if entry not in seen:
-                seen.add(entry)
-                result.append(entry)
-    return result
+    return _default_loader().compose_profiles(names)
 
 
 def list_profiles() -> list[str]:
     """List available profile names (bundled + user, deduplicated)."""
-    names: set[str] = set()
-    for directory in (_bundled_dir(), shield_profiles_dir()):
-        if directory.is_dir():
-            names.update(f.stem for f in directory.glob("*.txt"))
-    return sorted(names)
+    return _default_loader().list_profiles()

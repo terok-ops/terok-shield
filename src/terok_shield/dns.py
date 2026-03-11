@@ -15,7 +15,7 @@ from typing import Self
 from .config import ShieldConfig, shield_resolved_dir
 from .run import CommandRunner, dig_all
 from .util import is_ip as _is_ip
-from .validation import validate_safe_name
+from .validation import validate_container_name
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class DnsResolver:
 
     def _cache_path(self, container: str) -> Path:
         """Return the resolved IP cache path for a container."""
-        validate_safe_name(container)
+        validate_container_name(container)
         return self._resolved_dir / f"{container}.resolved"
 
     def _read_cache(self, path: Path) -> list[str]:
@@ -171,7 +171,7 @@ def _cache_path(container: str) -> Path:
     Raises:
         ValueError: If the container name contains path separators or traversal.
     """
-    validate_safe_name(container)
+    validate_container_name(container)
     return shield_resolved_dir() / f"{container}.resolved"
 
 

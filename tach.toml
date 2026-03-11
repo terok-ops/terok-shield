@@ -99,6 +99,7 @@ depends_on = [
     "terok_shield.profiles",
     "terok_shield.run",
     "terok_shield.util",
+    "terok_shield.validation",
 ]
 
 # CLI — depends on package root (public API)

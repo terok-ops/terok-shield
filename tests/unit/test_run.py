@@ -17,7 +17,14 @@ from terok_shield.run import (
     run,
 )
 
-from ..testnet import IPV6_CLOUDFLARE, NONEXISTENT_DOMAIN, TEST_DOMAIN, TEST_IP1, TEST_IP2
+from ..testnet import (
+    ALIAS_DOMAIN,
+    IPV6_CLOUDFLARE,
+    NONEXISTENT_DOMAIN,
+    TEST_DOMAIN,
+    TEST_IP1,
+    TEST_IP2,
+)
 
 
 class TestExecError(unittest.TestCase):
@@ -199,7 +206,7 @@ class TestDigAll(unittest.TestCase):
         """Filter out CNAME and other non-IP lines."""
         mock_run.return_value = unittest.mock.Mock(
             returncode=0,
-            stdout=f"alias.example.com.\n{TEST_IP1}\n{IPV6_CLOUDFLARE}\n",
+            stdout=f"{ALIAS_DOMAIN}\n{TEST_IP1}\n{IPV6_CLOUDFLARE}\n",
             stderr="",
         )
         result = dig_all(TEST_DOMAIN)

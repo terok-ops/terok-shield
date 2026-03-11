@@ -83,10 +83,10 @@ class TestAPISurface(unittest.TestCase):
 
     def test_shield_config_fields(self):
         """ShieldConfig has the expected fields with correct defaults."""
-        names = {f.name for f in dataclasses.fields(ShieldConfig)}
+        names = [f.name for f in dataclasses.fields(ShieldConfig)]
         self.assertEqual(
             names,
-            {"mode", "default_profiles", "loopback_ports", "audit_enabled", "paths"},
+            ["mode", "default_profiles", "loopback_ports", "audit_enabled", "paths"],
         )
 
         cfg = ShieldConfig()

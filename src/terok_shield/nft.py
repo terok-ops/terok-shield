@@ -136,7 +136,7 @@ class RulesetBuilder:
             dns: DNS server address (pasta default forwarder).
             loopback_ports: TCP ports to allow on the loopback interface.
         """
-        safe_ip(dns)
+        dns = safe_ip(dns)
         for p in loopback_ports:
             _safe_port(p)
         self._dns = dns
