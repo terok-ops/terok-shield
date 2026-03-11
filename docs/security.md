@@ -62,8 +62,8 @@ blocked.
 │  │  │  (applied by OCI hook)        │  │   │
 │  │  │                               │  │   │
 │  │  │  policy: DROP                 │  │   │
-│  │  │  allow: DNS, loopback, @allow_v4│  │   │
-│  │  │  reject: RFC1918              │  │   │
+│  │  │  allow: DNS, lo, @allow_v4/v6  │  │   │
+│  │  │  reject: RFC1918, v6-private  │  │   │
 │  │  └────────────────────────────────┘  │   │
 │  │                                      │   │
 │  │  ┌────────────────────────────────┐  │   │
@@ -86,23 +86,31 @@ The workload cannot modify nftables rules because `CAP_NET_ADMIN` is dropped,
 **Hook mode** (per-container netns, output chain):
 
 ```text
-IPv6 drop → loopback → established → DNS → loopback ports → allow_v4 → RFC1918 reject → deny all
+loopback → established → DNS → loopback ports → allow_v4/v6 → RFC1918 reject → v6-private reject → deny all
 ```
 
-**Rule ordering rationale:** the allow set (`@allow_v4`) is evaluated *before*
-RFC1918 reject rules. This lets operators allowlist specific RFC1918 addresses
-(e.g., local infrastructure) via allowlist profiles. Allowlisting RFC1918
-addresses or large CIDRs is logged with action `"note"` in the audit trail.
+**Rule ordering rationale:** the allow sets (`@allow_v4`, `@allow_v6`) are
+evaluated *before* private-range reject rules. This lets operators allowlist
+specific RFC1918 or IPv6 ULA addresses (e.g., local infrastructure) via
+allowlist profiles. Allowlisting private addresses or large CIDRs is logged
+with action `"note"` in the audit trail.
 
-### IPv6
+### Dual-stack (IPv4 + IPv6)
 
-All IPv6 traffic is **unconditionally dropped** (`meta nfproto ipv6 drop`) at
-the top of every chain, before any accept rules. The allow sets and RFC1918
-rules are IPv4-only — without the explicit drop, IPv6 established connections
-could bypass filtering via `ct state established,related`.
+The firewall operates in dual-stack mode using nftables `inet` tables, which
+handle both IPv4 and IPv6 within the same ruleset. Two parallel allow sets
+are maintained:
 
-IPv6 allowlisting support is planned
-([#16](https://github.com/terok-ai/terok-shield/issues/16)).
+- `allow_v4` (`type ipv4_addr; flags interval;`) — IPv4 allowlist
+- `allow_v6` (`type ipv6_addr; flags interval;`) — IPv6 allowlist
+
+DNS resolution queries both A and AAAA records, and resolved addresses are
+automatically routed to the correct set. Private ranges are rejected with
+family-specific ICMP errors:
+
+- RFC1918 + link-local (`169.254.0.0/16`): `reject with icmp type admin-prohibited`
+- IPv6 ULA (`fc00::/7`) + link-local (`fe80::/10`): `reject with icmpv6 type admin-prohibited`
+- Default deny: `reject with icmpx admin-prohibited` (cross-family)
 
 ## Fail-closed guarantees
 

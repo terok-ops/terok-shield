@@ -42,7 +42,7 @@ by log readers that only need summaries:
 
 ```json
 {"action": "setup", "detail": "[ips] cached: 1.1.1.1, 1.0.0.1, 10.0.0.5"}
-{"action": "setup", "detail": "[ips] added to allow_v4: 1.1.1.1, 1.0.0.1"}
+{"action": "setup", "detail": "[ips] added to allow sets: 1.1.1.1, 1.0.0.1"}
 ```
 
 ## Kernel packet logs

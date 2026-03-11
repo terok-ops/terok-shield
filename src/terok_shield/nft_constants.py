@@ -24,5 +24,12 @@ RFC1918: tuple[str, ...] = (
     "169.254.0.0/16",
 )
 
+# IPv6 private ranges: ULA (RFC 4193) + link-local (RFC 4291).
+# Same treatment as RFC1918 — rejected by default, logged when whitelisted.
+IPV6_PRIVATE: tuple[str, ...] = (
+    "fc00::/7",
+    "fe80::/10",
+)
+
 # ── Log prefixes ───────────────────────────────────────
 BYPASS_LOG_PREFIX = "TEROK_SHIELD_BYPASS"

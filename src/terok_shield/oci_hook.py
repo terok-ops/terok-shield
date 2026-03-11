@@ -19,7 +19,7 @@ import sys
 
 from .audit import configure_audit, log_event
 from .config import load_shield_config, shield_resolved_dir
-from .nft import add_elements, hook_ruleset, verify_ruleset
+from .nft import add_elements_dual, hook_ruleset, verify_ruleset
 from .run import ExecError, nft_via_nsenter
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -128,17 +128,17 @@ def _load_and_add_ips(container: str, pid: str) -> int:
 
     log_event(container, "setup", detail=f"[ips] cached: {', '.join(ips)}")
 
-    # Classify for logging (all IPs go to allow_v4 regardless)
+    # Classify for logging (IPs are routed to correct set by add_elements_dual)
     rfc1918_ips, broad_cidrs = _classify_ips(ips)
     if rfc1918_ips:
         log_event(container, "note", detail=f"rfc1918 whitelisted: {', '.join(rfc1918_ips)}")
     for cidr in broad_cidrs:
         log_event(container, "note", detail=f"broad range whitelisted: {cidr}")
 
-    elements_cmd = add_elements("allow_v4", ips)
+    elements_cmd = add_elements_dual(ips)
     if elements_cmd:
         _nft_exec(container, pid, stdin=elements_cmd, action="add-elements")
-        log_event(container, "setup", detail=f"[ips] added to allow_v4: {', '.join(ips)}")
+        log_event(container, "setup", detail=f"[ips] added to allow sets: {', '.join(ips)}")
 
     return len(ips)
 

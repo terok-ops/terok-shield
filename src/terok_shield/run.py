@@ -77,3 +77,25 @@ def dig(domain: str) -> list[str]:
     """Resolve domain to a list of IPv4 addresses.  Empty on failure."""
     out = run(["dig", "+short", "A", domain], check=False)
     return [line.strip() for line in out.splitlines() if _IPV4.match(line.strip())]
+
+
+def dig_aaaa(domain: str) -> list[str]:
+    """Resolve domain to a list of IPv6 addresses.  Empty on failure."""
+    import ipaddress as _ipaddress
+
+    out = run(["dig", "+short", "AAAA", domain], check=False)
+    result: list[str] = []
+    for line in out.splitlines():
+        addr = line.strip()
+        if addr:
+            try:
+                _ipaddress.IPv6Address(addr)
+                result.append(addr)
+            except ValueError:
+                continue
+    return result
+
+
+def dig_all(domain: str) -> list[str]:
+    """Resolve domain to both IPv4 and IPv6 addresses.  Empty on failure."""
+    return dig(domain) + dig_aaaa(domain)

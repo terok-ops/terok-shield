@@ -34,7 +34,7 @@ from terok_shield.mode_hook import (
 )
 from terok_shield.nft import bypass_ruleset, hook_ruleset
 
-from ..testnet import TEST_DOMAIN, TEST_IP1
+from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1
 
 
 class TestDetectRootlessNetworkMode(unittest.TestCase):
@@ -340,7 +340,7 @@ class TestAllowDenyIp(unittest.TestCase):
 
     @mock.patch("terok_shield.mode_hook.nft_via_nsenter")
     def test_allow_ip(self, mock_nsenter):
-        """allow_ip adds element to allow_v4 set."""
+        """allow_ip adds element to allow_v4 set for IPv4."""
         allow_ip("test", TEST_IP1)
         mock_nsenter.assert_called_once()
         call_args = mock_nsenter.call_args[0]
@@ -349,12 +349,32 @@ class TestAllowDenyIp(unittest.TestCase):
         self.assertIn("allow_v4", call_args)
 
     @mock.patch("terok_shield.mode_hook.nft_via_nsenter")
+    def test_allow_ipv6(self, mock_nsenter):
+        """allow_ip adds element to allow_v6 set for IPv6."""
+        allow_ip("test", IPV6_CLOUDFLARE)
+        mock_nsenter.assert_called_once()
+        call_args = mock_nsenter.call_args[0]
+        self.assertEqual(call_args[0], "test")
+        self.assertIn("add", call_args)
+        self.assertIn("allow_v6", call_args)
+
+    @mock.patch("terok_shield.mode_hook.nft_via_nsenter")
     def test_deny_ip(self, mock_nsenter):
-        """deny_ip removes element from allow_v4 set."""
+        """deny_ip removes element from allow_v4 set for IPv4."""
         deny_ip("test", TEST_IP1)
         mock_nsenter.assert_called_once()
         call_args = mock_nsenter.call_args[0]
         self.assertIn("delete", call_args)
+        self.assertIn("allow_v4", call_args)
+
+    @mock.patch("terok_shield.mode_hook.nft_via_nsenter")
+    def test_deny_ipv6(self, mock_nsenter):
+        """deny_ip removes element from allow_v6 set for IPv6."""
+        deny_ip("test", IPV6_CLOUDFLARE)
+        mock_nsenter.assert_called_once()
+        call_args = mock_nsenter.call_args[0]
+        self.assertIn("delete", call_args)
+        self.assertIn("allow_v6", call_args)
 
     def test_allow_invalid_ip_raises(self):
         """allow_ip raises ValueError for invalid IPs."""

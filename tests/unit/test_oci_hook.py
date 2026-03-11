@@ -10,22 +10,22 @@ import unittest.mock
 from pathlib import Path
 
 from terok_shield.config import ANNOTATION_KEY, ANNOTATION_NAME_KEY, ShieldConfig
-from terok_shield.nft_constants import RFC1918
+from terok_shield.nft_constants import IPV6_PRIVATE, RFC1918
 from terok_shield.oci_hook import _parse_oci_state, _read_resolved_ips, apply_hook, hook_main
 from terok_shield.run import ExecError
 
 from ..testnet import BROAD_CIDR_8, RFC1918_HOST, TEST_IP1, TEST_IP2
 
-# Mock output that passes verify_ruleset (must have chain structure
-# and RFC1918 reject rules in proper context for regex matching)
+# Mock output that passes verify_ruleset (must have chain structure,
+# RFC1918 reject rules, IPv6 private reject rules, and allow_v6 set)
 _VALID_LIST_OUTPUT = (
     "chain output { type filter hook output priority filter; policy drop;\n"
-    "meta nfproto ipv6 drop\n"
-    "TEROK_SHIELD_DENIED @allow_v4\n"
+    "TEROK_SHIELD_DENIED @allow_v4 @allow_v6\n"
     + "\n".join(f"ip daddr {net} reject with icmp type admin-prohibited" for net in RFC1918)
+    + "\n"
+    + "\n".join(f"ip6 daddr {net} reject with icmpv6 type admin-prohibited" for net in IPV6_PRIVATE)
     + "\n}\n"
     + "chain input { type filter hook input priority filter; policy drop;\n"
-    + "meta nfproto ipv6 drop\n"
     + "drop }"
 )
 
@@ -213,7 +213,7 @@ class TestApplyHook(unittest.TestCase):
             self.assertIn("ruleset applied", details)
             self.assertIn("read 2 cached IPs", details)
             self.assertTrue(any(f"[ips] cached: {TEST_IP1}" in d for d in details))
-            self.assertTrue(any(f"[ips] added to allow_v4: {TEST_IP1}" in d for d in details))
+            self.assertTrue(any(f"[ips] added to allow sets: {TEST_IP1}" in d for d in details))
             self.assertIn("verification passed", details)
             self.assertIn("applied with 2 allowed IPs", details)
 

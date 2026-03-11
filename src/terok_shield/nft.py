@@ -18,6 +18,7 @@ import textwrap
 
 from .nft_constants import (
     BYPASS_LOG_PREFIX,
+    IPV6_PRIVATE,
     NFT_TABLE,
     PASTA_DNS,
     RFC1918,
@@ -36,20 +37,30 @@ def _safe_port(port: int) -> int:
 
 
 def safe_ip(value: str) -> str:
-    """Validate IPv4 address or CIDR notation.
+    """Validate an IPv4 or IPv6 address or CIDR notation.
 
     Prevents nft command injection by ensuring the value is a valid
-    IPv4 address or network.  Raises ValueError on invalid input.
+    IP address or network.  Raises ValueError on invalid input.
     """
     v = value.strip()
     try:
         if "/" in v:
-            ipaddress.IPv4Network(v, strict=False)
+            ipaddress.ip_network(v, strict=False)
         else:
-            ipaddress.IPv4Address(v)
-    except (ipaddress.AddressValueError, ipaddress.NetmaskValueError) as e:
+            ipaddress.ip_address(v)
+    except ValueError as e:
         raise ValueError(f"Invalid IP/CIDR: {v!r}") from e
     return v
+
+
+def _is_v4(value: str) -> bool:
+    """Return True if a validated IP string is IPv4."""
+    try:
+        if "/" in value:
+            return isinstance(ipaddress.ip_network(value, strict=False), ipaddress.IPv4Network)
+        return isinstance(ipaddress.ip_address(value), ipaddress.IPv4Address)
+    except ValueError:
+        return False
 
 
 # ── Rulesets ─────────────────────────────────────────────
@@ -63,21 +74,36 @@ def _rfc1918_rules(prefix: str = "TEROK_SHIELD_RFC1918") -> str:
     )
 
 
-def _audit_deny_rule() -> str:
-    """Generate the deny-all rule with audit logging."""
-    return (
-        '        log prefix "TEROK_SHIELD_DENIED: " counter\n'
-        "        reject with icmp type admin-prohibited"
+def _ipv6_private_rules(prefix: str = "TEROK_SHIELD_PRIVATE_V6") -> str:
+    """Generate IPv6 private-range reject rules (ULA + link-local)."""
+    return "\n".join(
+        f'        ip6 daddr {net} log prefix "{prefix}: " reject with icmpv6 type admin-prohibited'
+        for net in IPV6_PRIVATE
     )
 
 
-def _audit_allow_rule() -> str:
-    """Generate an audit rule for allowed traffic.
+def _audit_deny_rule() -> str:
+    """Generate the deny-all rule with audit logging.
 
-    No rate limit — only new connections reach this rule because
+    Uses ``icmpx`` for cross-family reject in ``inet`` tables —
+    auto-selects ICMP (IPv4) or ICMPv6 (IPv6).
+    """
+    return (
+        '        log prefix "TEROK_SHIELD_DENIED: " counter\n'
+        "        reject with icmpx admin-prohibited"
+    )
+
+
+def _audit_allow_rules() -> str:
+    """Generate audit rules for allowed traffic (IPv4 + IPv6).
+
+    No rate limit — only new connections reach these rules because
     ``ct state established,related accept`` is earlier in the chain.
     """
-    return '        ip daddr @allow_v4 log prefix "TEROK_SHIELD_ALLOWED: " counter accept'
+    return (
+        '        ip daddr @allow_v4 log prefix "TEROK_SHIELD_ALLOWED: " counter accept\n'
+        '        ip6 daddr @allow_v6 log prefix "TEROK_SHIELD_ALLOWED: " counter accept'
+    )
 
 
 def _loopback_port_rules(ports: tuple[int, ...]) -> str:
@@ -89,9 +115,10 @@ def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> 
     """Generate a per-container nftables ruleset for hook mode.
 
     Applied by the OCI hook into the container's own netns.
+    Dual-stack: both IPv4 and IPv6 use deny-all + allowlist.
 
     Chain order (output):
-        IPv6 drop -> loopback -> established -> DNS -> loopback ports -> allow set -> RFC1918 reject -> deny
+        loopback -> established -> DNS -> loopback ports -> allow sets -> RFC1918/v6-private reject -> deny
 
     Args:
         dns: DNS server address (pasta default forwarder).
@@ -105,23 +132,24 @@ def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> 
     return textwrap.dedent(f"""\
         table {NFT_TABLE} {{
             set allow_v4 {{ type ipv4_addr; flags interval; }}
+            set allow_v6 {{ type ipv6_addr; flags interval; }}
 
             chain output {{
                 type filter hook output priority filter; policy drop;
-                meta nfproto ipv6 drop
                 oifname "lo" accept
                 ct state established,related accept
                 udp dport 53 ip daddr {dns} accept
                 tcp dport 53 ip daddr {dns} accept{port_block}\
-        {_audit_allow_rule()}
+        {_audit_allow_rules()}
                 ip daddr @allow_v4 accept
+                ip6 daddr @allow_v6 accept
         {_rfc1918_rules()}
+        {_ipv6_private_rules()}
         {_audit_deny_rule()}
             }}
 
             chain input {{
                 type filter hook input priority filter; policy drop;
-                meta nfproto ipv6 drop
                 iifname "lo" accept
                 ct state established,related accept
                 udp sport 53 accept
@@ -141,38 +169,38 @@ def bypass_ruleset(
     """Generate a bypass (accept-all + log) nftables ruleset.
 
     Same structure as ``hook_ruleset()`` but output chain policy is accept
-    and new connections are logged with the bypass prefix.  RFC1918 reject
-    rules are kept unless *allow_all* is True.
+    and new connections are logged with the bypass prefix.  Private-range
+    reject rules (RFC1918 + IPv6 ULA/link-local) are kept unless
+    *allow_all* is True.
 
     Args:
         dns: DNS server address (pasta default forwarder).
         loopback_ports: TCP ports to allow on the loopback interface.
-        allow_all: If True, remove RFC1918 reject rules.
+        allow_all: If True, remove private-range reject rules.
     """
     safe_ip(dns)
     for p in loopback_ports:
         _safe_port(p)
     port_rules = _loopback_port_rules(loopback_ports)
     port_block = f"\n{port_rules}\n" if port_rules else "\n"
-    rfc1918_block = "" if allow_all else f"\n{_rfc1918_rules()}"
+    private_block = "" if allow_all else f"\n{_rfc1918_rules()}\n{_ipv6_private_rules()}"
     bypass_log = f'        ct state new log prefix "{BYPASS_LOG_PREFIX}: " counter'
     return textwrap.dedent(f"""\
         table {NFT_TABLE} {{
             set allow_v4 {{ type ipv4_addr; flags interval; }}
+            set allow_v6 {{ type ipv6_addr; flags interval; }}
 
             chain output {{
                 type filter hook output priority filter; policy accept;
-                meta nfproto ipv6 drop
                 oifname "lo" accept
                 ct state established,related accept
                 udp dport 53 ip daddr {dns} accept
                 tcp dport 53 ip daddr {dns} accept{port_block}\
-        {bypass_log}{rfc1918_block}
+        {bypass_log}{private_block}
             }}
 
             chain input {{
                 type filter hook input priority filter; policy drop;
-                meta nfproto ipv6 drop
                 iifname "lo" accept
                 ct state established,related accept
                 udp sport 53 accept
@@ -197,13 +225,25 @@ def add_elements(set_name: str, ips: list[str], table: str = NFT_TABLE) -> str:
     return f"add element {table} {set_name} {{ {', '.join(valid)} }}\n"
 
 
+def add_elements_dual(ips: list[str], table: str = NFT_TABLE) -> str:
+    """Classify IPs by family and generate add-element commands for both sets.
+
+    IPv4 addresses go to ``allow_v4``, IPv6 to ``allow_v6``.
+    Returns empty string if no valid IPs.
+    """
+    v4 = [ip for ip in ips if _try_validate(ip) and _is_v4(ip)]
+    v6 = [ip for ip in ips if _try_validate(ip) and not _is_v4(ip)]
+    parts: list[str] = []
+    cmd = add_elements("allow_v4", v4, table)
+    if cmd:
+        parts.append(cmd)
+    cmd = add_elements("allow_v6", v6, table)
+    if cmd:
+        parts.append(cmd)
+    return "".join(parts)
+
+
 # ── Verification ─────────────────────────────────────────
-
-
-def _has_leading_ipv6_drop(nft_output: str, chain: str, *, policy: str) -> bool:
-    """Check that a chain has the expected policy and starts with IPv6 drop."""
-    pattern = rf"chain {chain} \{{.*?policy {policy};\s*meta nfproto ipv6 drop"
-    return re.search(pattern, nft_output, re.DOTALL) is not None
 
 
 def _verify_rfc1918_blocks(nft_output: str) -> list[str]:
@@ -220,15 +260,27 @@ def _verify_rfc1918_blocks(nft_output: str) -> list[str]:
     return errors
 
 
+def _verify_ipv6_private_blocks(nft_output: str) -> list[str]:
+    """Check IPv6 private-range reject rules are present."""
+    errors: list[str] = []
+    for net in IPV6_PRIVATE:
+        pattern = rf"ip6 daddr {re.escape(net)}.*reject"
+        if not re.search(pattern, nft_output):
+            errors.append(f"IPv6 private reject rule for {net} missing")
+    return errors
+
+
 def verify_ruleset(nft_output: str) -> list[str]:
     """Check applied ruleset invariants.  Returns errors (empty = OK).
 
     Verifies:
     - Default policy is drop
-    - IPv6 drop is the first rule in every chain
+    - Both output and input chains exist
     - Reject type is present
     - Deny log prefix is present
     - All RFC1918 ranges are present (reject rules for non-whitelisted LAN traffic)
+    - All IPv6 private ranges are present
+    - Dual-stack allow sets are declared
     """
     errors: list[str] = []
     if "policy drop" not in nft_output:
@@ -236,18 +288,14 @@ def verify_ruleset(nft_output: str) -> list[str]:
     for chain in ("output", "input"):
         if f"chain {chain}" not in nft_output:
             errors.append(f"{chain} chain missing")
-            continue
-        if not _has_leading_ipv6_drop(nft_output, chain, policy="drop"):
-            errors.append(f"IPv6 drop rule missing or misplaced in {chain} chain")
-    if "chain forward" in nft_output and not _has_leading_ipv6_drop(
-        nft_output, "forward", policy="drop"
-    ):
-        errors.append("IPv6 drop rule missing or misplaced in forward chain")
     if "admin-prohibited" not in nft_output:
         errors.append("reject type missing")
     if "TEROK_SHIELD_DENIED" not in nft_output:
         errors.append("deny log prefix missing")
+    if "allow_v6" not in nft_output:
+        errors.append("allow_v6 set missing")
     errors.extend(_verify_rfc1918_blocks(nft_output))
+    errors.extend(_verify_ipv6_private_blocks(nft_output))
     return errors
 
 
@@ -257,8 +305,8 @@ def verify_bypass_ruleset(nft_output: str) -> list[str]:
     Verifies:
     - Output chain has policy accept
     - Input chain has policy drop
-    - IPv6 drop is the first rule in every chain
     - Bypass log prefix is present
+    - Dual-stack allow sets are declared
     """
     errors: list[str] = []
     if "policy accept" not in nft_output:
@@ -268,12 +316,10 @@ def verify_bypass_ruleset(nft_output: str) -> list[str]:
     for chain in ("output", "input"):
         if f"chain {chain}" not in nft_output:
             errors.append(f"{chain} chain missing")
-            continue
-        expected_policy = "accept" if chain == "output" else "drop"
-        if not _has_leading_ipv6_drop(nft_output, chain, policy=expected_policy):
-            errors.append(f"IPv6 drop rule missing or misplaced in {chain} chain")
     if BYPASS_LOG_PREFIX not in nft_output:
         errors.append("bypass log prefix missing")
+    if "allow_v6" not in nft_output:
+        errors.append("allow_v6 set missing")
     return errors
 
 

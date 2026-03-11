@@ -127,7 +127,7 @@ class TestApplyHookAudit:
             details = [e.get("detail", "") for e in entries]
             # IPs must appear in the tagged detail lines
             assert any("[ips] cached:" in d and resolved_ips[0] in d for d in details)
-            assert any("[ips] added to allow_v4:" in d and resolved_ips[0] in d for d in details)
+            assert any("[ips] added to allow sets:" in d and resolved_ips[0] in d for d in details)
 
     def test_apply_hook_audit_on_failure(
         self, container: str, monkeypatch: pytest.MonkeyPatch
