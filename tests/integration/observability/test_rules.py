@@ -5,8 +5,9 @@
 
 import pytest
 
-from terok_shield import shield_rules
+from terok_shield import shield_down, shield_rules, shield_up
 from terok_shield.cli import main
+from terok_shield.nft_constants import BYPASS_LOG_PREFIX
 
 from ..conftest import nft_missing, podman_missing
 
@@ -44,6 +45,52 @@ class TestRulesCLI:
         main(["rules", shielded_container])
         captured = capsys.readouterr()
         assert "terok_shield" in captured.out
+
+    def test_cli_rules_shows_state_up(
+        self, shielded_container: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        """``main(["rules", container])`` shows State: up for a shielded container."""
+        main(["rules", shielded_container])
+        captured = capsys.readouterr()
+        assert "State: up" in captured.out
+
+    def test_cli_rules_shows_state_down(
+        self, shielded_container: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        """``main(["rules", container])`` shows State: down after bypass."""
+        shield_down(shielded_container)
+        main(["rules", shielded_container])
+        captured = capsys.readouterr()
+        assert "State: down" in captured.out
+
+
+# ── Rules content in bypass mode ────────────────────────
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@podman_missing
+@nft_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestRulesBypassAPI:
+    """Verify ``shield_rules()`` returns correct bypass ruleset."""
+
+    def test_rules_contain_bypass_prefix(self, shielded_container: str) -> None:
+        """Bypass ruleset contains the TEROK_SHIELD_BYPASS log prefix."""
+        shield_down(shielded_container)
+        rules = shield_rules(shielded_container)
+        assert BYPASS_LOG_PREFIX in rules
+        assert "policy accept" in rules
+
+    def test_rules_restored_after_up(self, shielded_container: str) -> None:
+        """Rules revert to deny-all after shield_up()."""
+        shield_down(shielded_container)
+        assert "policy accept" in shield_rules(shielded_container)
+
+        shield_up(shielded_container)
+        rules = shield_rules(shielded_container)
+        assert "policy drop" in rules
+        assert BYPASS_LOG_PREFIX not in rules
 
 
 # ── CLI logs ─────────────────────────────────────────────
