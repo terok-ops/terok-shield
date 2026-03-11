@@ -8,10 +8,10 @@ import pytest
 from terok_shield import ShieldState, shield_state
 from terok_shield.cli import main
 from terok_shield.nft_constants import BYPASS_LOG_PREFIX
-from tests.testnet import BLOCKED_TARGET_HTTP
+from tests.testnet import BLOCKED_TARGET_DNS_PORT, BLOCKED_TARGET_HTTP, BLOCKED_TARGET_IP
 
 from ..conftest import nft_missing, podman_missing
-from ..helpers import assert_blocked, assert_reachable
+from ..helpers import assert_blocked, assert_connectable
 
 
 @pytest.mark.needs_podman
@@ -51,7 +51,7 @@ class TestBypassCLI:
         assert_blocked(shielded_container, BLOCKED_TARGET_HTTP)
 
         main(["down", shielded_container])
-        assert_reachable(shielded_container, BLOCKED_TARGET_HTTP)
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
         main(["up", shielded_container])
         assert_blocked(shielded_container, BLOCKED_TARGET_HTTP)

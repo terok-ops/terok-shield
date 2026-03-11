@@ -30,12 +30,13 @@ from terok_shield import (
 from tests.testnet import (
     ALLOWED_TARGET_HTTP,
     ALLOWED_TARGET_IPS,
+    BLOCKED_TARGET_DNS_PORT,
     BLOCKED_TARGET_HTTP,
     BLOCKED_TARGET_IP,
 )
 
 from ..conftest import CTR_PREFIX, IMAGE, nft_missing, podman_missing
-from ..helpers import assert_blocked, assert_reachable
+from ..helpers import assert_blocked, assert_connectable, assert_reachable, start_shielded_container
 
 
 @pytest.mark.needs_podman
@@ -55,7 +56,7 @@ class TestBypassBasicLifecycle:
         # Shield down: traffic allowed
         shield_down(shielded_container)
         assert shield_state(shielded_container) == ShieldState.DOWN
-        assert_reachable(shielded_container, BLOCKED_TARGET_HTTP)
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
         # Shield up: traffic blocked again
         shield_up(shielded_container)
@@ -69,7 +70,7 @@ class TestBypassBasicLifecycle:
 
         rules = shield_rules(shielded_container)
         assert "policy accept" in rules
-        assert_reachable(shielded_container, BLOCKED_TARGET_HTTP)
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
         shield_up(shielded_container)
         assert shield_state(shielded_container) == ShieldState.UP
@@ -91,7 +92,7 @@ class TestBypassIdempotency:
 
         shield_down(shielded_container)
         assert shield_state(shielded_container) == ShieldState.DOWN
-        assert_reachable(shielded_container, BLOCKED_TARGET_HTTP)
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
     def test_up_twice_stays_up(self, shielded_container: str) -> None:
         """Calling shield_up() on an already-UP container is safe."""
@@ -177,7 +178,7 @@ class TestBypassWithAllowDeny:
 
         # Deny shouldn't affect traffic in bypass mode
         shield_deny(shielded_container, BLOCKED_TARGET_IP)
-        assert_reachable(shielded_container, BLOCKED_TARGET_HTTP)
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
 
 @pytest.mark.needs_podman
@@ -202,12 +203,7 @@ class TestBypassIPRestoration:
 
         try:
             extra_args = shield_pre_start(name, config=cfg)
-            subprocess.run(
-                ["podman", "run", "-d", "--name", name, *extra_args, IMAGE, "sleep", "120"],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
+            start_shielded_container(name, extra_args, IMAGE)
 
             # Allow Cloudflare IPs and verify reachability
             for ip in ALLOWED_TARGET_IPS:
@@ -295,12 +291,7 @@ class TestBypassFullE2E:
 
         try:
             extra_args = shield_pre_start(name, config=cfg)
-            subprocess.run(
-                ["podman", "run", "-d", "--name", name, *extra_args, IMAGE, "sleep", "120"],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
+            start_shielded_container(name, extra_args, IMAGE)
 
             # Step 1: Default deny is in effect
             assert shield_state(name) == ShieldState.UP
@@ -322,17 +313,17 @@ class TestBypassFullE2E:
             shield_down(name)
             assert shield_state(name) == ShieldState.DOWN
             assert_reachable(name, ALLOWED_TARGET_HTTP)
-            assert_reachable(name, BLOCKED_TARGET_HTTP)
+            assert_connectable(name, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
             # Step 4: Switch to full bypass to also check RFC1918 destinations
             shield_down(name, allow_all=True)
             assert shield_state(name) == ShieldState.DOWN_ALL
-            assert_reachable(name, BLOCKED_TARGET_HTTP)
+            assert_connectable(name, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
             # Step 5: Back to protected bypass
             shield_down(name)
             assert shield_state(name) == ShieldState.DOWN
-            assert_reachable(name, BLOCKED_TARGET_HTTP)
+            assert_connectable(name, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
             # Step 6: Restore the shield
             shield_up(name)

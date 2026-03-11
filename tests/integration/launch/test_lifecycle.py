@@ -25,7 +25,7 @@ from terok_shield import (
 
 from ...testnet import ALLOWED_TARGET_HTTP, ALLOWED_TARGET_IPS
 from ..conftest import CTR_PREFIX, IMAGE, nft_missing, podman_missing
-from ..helpers import assert_blocked, assert_reachable
+from ..helpers import assert_blocked, assert_reachable, start_shielded_container
 
 
 @pytest.mark.needs_podman
@@ -52,12 +52,7 @@ class TestAPILifecycle:
 
             # 3. Start container with shield args
             subprocess.run(["podman", "rm", "-f", name], capture_output=True, timeout=30)
-            subprocess.run(
-                ["podman", "run", "-d", "--name", name, *extra_args, IMAGE, "sleep", "120"],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
+            start_shielded_container(name, extra_args, IMAGE)
 
             # 4. Verify ruleset applied
             rules = shield_rules(name, config=cfg)
