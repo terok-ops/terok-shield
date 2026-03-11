@@ -62,7 +62,16 @@ def _is_v4(value: str) -> bool:
         return False
 
 
-# ── Rulesets ─────────────────────────────────────────────
+def _try_validate(ip: str) -> bool:
+    """Return True if ip is a valid IP address/CIDR, False otherwise."""
+    try:
+        safe_ip(ip)
+        return True
+    except ValueError:
+        return False
+
+
+# ── Private helpers ──────────────────────────────────────
 
 
 def _private_range_rules(prefix: str = "TEROK_SHIELD_PRIVATE") -> str:
@@ -81,7 +90,7 @@ def _private_range_rules(prefix: str = "TEROK_SHIELD_PRIVATE") -> str:
 def _audit_deny_rule() -> str:
     """Generate the deny-all rule with audit logging.
 
-    Uses ``icmpx`` for cross-family reject in ``inet`` tables —
+    Uses ``icmpx`` for cross-family reject in ``inet`` tables --
     auto-selects ICMP (IPv4) or ICMPv6 (IPv6).
     """
     return (
@@ -93,7 +102,7 @@ def _audit_deny_rule() -> str:
 def _audit_allow_rules() -> str:
     """Generate audit rules for allowed traffic (IPv4 + IPv6).
 
-    No rate limit — only new connections reach these rules because
+    No rate limit -- only new connections reach these rules because
     ``ct state established,related accept`` is earlier in the chain.
     """
     return (
@@ -105,6 +114,71 @@ def _audit_allow_rules() -> str:
 def _loopback_port_rules(ports: tuple[int, ...]) -> str:
     """Generate nft accept rules for loopback ports."""
     return "\n".join(f'            tcp dport {p} oifname "lo" accept' for p in ports)
+
+
+# ── RulesetBuilder ───────────────────────────────────────
+
+
+class RulesetBuilder:
+    """Builder pattern for nftables ruleset generation and verification.
+
+    Security boundary: only stdlib + nft_constants imports.
+    All inputs validated before interpolation.
+
+    Binds ``dns`` and ``loopback_ports`` once at construction -- these
+    were previously threaded as parameters to every function call.
+    """
+
+    def __init__(self, *, dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> None:
+        """Create a builder with validated DNS and loopback port config.
+
+        Args:
+            dns: DNS server address (pasta default forwarder).
+            loopback_ports: TCP ports to allow on the loopback interface.
+        """
+        safe_ip(dns)
+        for p in loopback_ports:
+            _safe_port(p)
+        self._dns = dns
+        self._loopback_ports = loopback_ports
+
+    def build_hook(self) -> str:
+        """Generate the hook-mode (deny-all) nftables ruleset."""
+        return hook_ruleset(dns=self._dns, loopback_ports=self._loopback_ports)
+
+    def build_bypass(self, *, allow_all: bool = False) -> str:
+        """Generate the bypass-mode (accept-all + log) ruleset."""
+        return bypass_ruleset(
+            dns=self._dns,
+            loopback_ports=self._loopback_ports,
+            allow_all=allow_all,
+        )
+
+    def verify_hook(self, nft_output: str) -> list[str]:
+        """Check applied hook ruleset invariants.  Returns errors (empty = OK)."""
+        return verify_ruleset(nft_output)
+
+    def verify_bypass(self, nft_output: str, *, allow_all: bool = False) -> list[str]:
+        """Check applied bypass ruleset invariants.  Returns errors (empty = OK)."""
+        return verify_bypass_ruleset(nft_output, allow_all=allow_all)
+
+    @staticmethod
+    def safe_ip(value: str) -> str:
+        """Validate an IP address or CIDR -- delegates to module-level ``safe_ip``."""
+        return safe_ip(value)
+
+    @staticmethod
+    def add_elements(set_name: str, ips: list[str], table: str = NFT_TABLE) -> str:
+        """Generate nft command to add validated IPs to a set."""
+        return add_elements(set_name, ips, table)
+
+    @staticmethod
+    def add_elements_dual(ips: list[str], table: str = NFT_TABLE) -> str:
+        """Classify IPs by family and generate add-element commands for both sets."""
+        return add_elements_dual(ips, table)
+
+
+# ── Module-level free functions (unchanged API) ──────────
 
 
 def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> str:
@@ -316,12 +390,3 @@ def verify_bypass_ruleset(nft_output: str, *, allow_all: bool = False) -> list[s
     if not allow_all:
         errors.extend(_verify_private_blocks(nft_output))
     return errors
-
-
-def _try_validate(ip: str) -> bool:
-    """Return True if ip is a valid IP address/CIDR, False otherwise."""
-    try:
-        safe_ip(ip)
-        return True
-    except ValueError:
-        return False
