@@ -6,6 +6,9 @@
 Verifies actual traffic flows correctly when the shield is down:
 all outbound traffic accepted (with logging), RFC1918 still rejected
 by default, and IPv6 private ranges still rejected.
+
+Traffic tests are split by protocol/port so that future rule changes
+(e.g. different treatment for DNS vs HTTP) are caught individually.
 """
 
 import pytest
@@ -14,11 +17,15 @@ from terok_shield import shield_down, shield_rules, shield_up
 from terok_shield.nft_constants import BYPASS_LOG_PREFIX, IPV6_PRIVATE, RFC1918
 from tests.testnet import (
     ALLOWED_TARGET_HTTP,
+    BLOCKED_TARGET_DNS_PORT,
     BLOCKED_TARGET_HTTP,
+    BLOCKED_TARGET_IP,
+    CONNCHECK_HTTP,
+    CONNCHECK_HTTPS,
 )
 
 from ..conftest import nft_missing, podman_missing
-from ..helpers import assert_blocked, assert_reachable
+from ..helpers import assert_blocked, assert_connectable, assert_reachable
 
 
 @pytest.mark.needs_podman
@@ -26,25 +33,88 @@ from ..helpers import assert_blocked, assert_reachable
 @podman_missing
 @nft_missing
 @pytest.mark.usefixtures("nft_in_netns")
-class TestBypassTraffic:
-    """Verify traffic behavior when shield is down."""
+class TestBypassTrafficDNS:
+    """Verify DNS (port 53) connectivity during bypass."""
 
-    def test_all_traffic_allowed_in_bypass(self, shielded_container: str) -> None:
-        """Both normally-allowed and normally-blocked destinations are reachable."""
-        # Verify blocked before bypass
-        assert_blocked(shielded_container, BLOCKED_TARGET_HTTP)
-
+    def test_dns_connectable_in_bypass(self, shielded_container: str) -> None:
+        """DNS port (53) on a non-allowed target is connectable during bypass."""
         shield_down(shielded_container)
-        assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
-        assert_reachable(shielded_container, BLOCKED_TARGET_HTTP)
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
-    def test_traffic_blocked_again_after_up(self, shielded_container: str) -> None:
-        """Traffic is blocked again after restoring the shield."""
+    def test_dns_blocked_again_after_up(self, shielded_container: str) -> None:
+        """DNS connectivity is blocked again after restoring the shield."""
         shield_down(shielded_container)
-        assert_reachable(shielded_container, BLOCKED_TARGET_HTTP)
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
         shield_up(shielded_container)
         assert_blocked(shielded_container, BLOCKED_TARGET_HTTP)
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@podman_missing
+@nft_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestBypassTrafficHTTP:
+    """Verify HTTP (port 80) connectivity during bypass."""
+
+    def test_http_reachable_in_bypass(self, shielded_container: str) -> None:
+        """HTTP (port 80) to a non-allowed target is reachable during bypass."""
+        shield_down(shielded_container)
+        assert_reachable(shielded_container, CONNCHECK_HTTP)
+
+    def test_http_blocked_again_after_up(self, shielded_container: str) -> None:
+        """HTTP traffic to non-allowed target is blocked after restoring shield."""
+        shield_down(shielded_container)
+        assert_reachable(shielded_container, CONNCHECK_HTTP)
+
+        shield_up(shielded_container)
+        assert_blocked(shielded_container, CONNCHECK_HTTP)
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@podman_missing
+@nft_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestBypassTrafficHTTPS:
+    """Verify HTTPS (port 443) connectivity during bypass."""
+
+    def test_https_reachable_in_bypass(self, shielded_container: str) -> None:
+        """HTTPS (port 443) to a non-allowed target is reachable during bypass."""
+        shield_down(shielded_container)
+        assert_reachable(shielded_container, CONNCHECK_HTTPS)
+
+    def test_https_blocked_again_after_up(self, shielded_container: str) -> None:
+        """HTTPS traffic to non-allowed target is blocked after restoring shield."""
+        shield_down(shielded_container)
+        assert_reachable(shielded_container, CONNCHECK_HTTPS)
+
+        shield_up(shielded_container)
+        assert_blocked(shielded_container, CONNCHECK_HTTPS)
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@podman_missing
+@nft_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestBypassTrafficAllowed:
+    """Verify allowed targets remain reachable during bypass."""
+
+    def test_allowed_target_reachable_in_bypass(self, shielded_container: str) -> None:
+        """Already-allowed HTTP target stays reachable during bypass."""
+        shield_down(shielded_container)
+        assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@podman_missing
+@nft_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestBypassRuleset:
+    """Verify structural properties of the bypass ruleset."""
 
     def test_bypass_ruleset_has_log_prefix(self, shielded_container: str) -> None:
         """The bypass ruleset contains the TEROK_SHIELD_BYPASS log prefix."""

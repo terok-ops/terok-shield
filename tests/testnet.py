@@ -53,7 +53,17 @@ ALLOWED_TARGET_HTTPS = f"https://{ALLOWED_TARGET_DOMAIN}/"  # HTTPS (port 443)
 # ── Blocked target: Google DNS (used as a non-allowed destination) ──
 
 BLOCKED_TARGET_IP = "8.8.8.8"  # Google Public DNS
-BLOCKED_TARGET_HTTP = f"http://{BLOCKED_TARGET_IP}/"
+BLOCKED_TARGET_HTTP = (
+    f"http://{BLOCKED_TARGET_IP}/"  # No HTTP server on port 80; for assert_blocked only
+)
+BLOCKED_TARGET_DNS_PORT = 53  # DNS port (always open on BLOCKED_TARGET_IP)
+
+# ── Connectivity check targets (non-allowed, respond on HTTP/HTTPS) ──
+# Purpose-built endpoints for internet reachability testing during bypass.
+# They resolve to IPs NOT in the default allow set.
+
+CONNCHECK_HTTP = "http://connectivitycheck.gstatic.com/generate_204"  # Google, HTTP 204
+CONNCHECK_HTTPS = "https://dns.google/"  # Google DNS-over-HTTPS (resolves to 8.8.8.8/8.8.4.4)
 
 # ── Other public DNS resolvers (used in add-elements / multi-IP tests) ──
 

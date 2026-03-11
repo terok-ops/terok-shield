@@ -7,7 +7,85 @@ Provides container exec helpers and assertion functions used by both
 the internal firewall tests and the public API / CLI lifecycle tests.
 """
 
+import json
+import os
 import subprocess
+from pathlib import Path
+
+
+def _hook_diagnostics(extra_args: list[str]) -> str:
+    """Gather OCI hook file diagnostics from extra_args (called only on failure)."""
+    try:
+        idx = extra_args.index("--hooks-dir")
+        hooks_dir = Path(extra_args[idx + 1])
+        hook_json = hooks_dir / "terok-shield-createRuntime.json"
+        if not hook_json.exists():
+            return f"\n  [diag] hook JSON missing: {hook_json}"
+        data = json.loads(hook_json.read_text())
+        ep = Path(data["hook"]["path"])
+        parts = [f"entrypoint={ep}", f"exists={ep.exists()}"]
+        if ep.exists():
+            parts.append(f"executable={os.access(ep, os.X_OK)}")
+            parts.append(f"content={ep.read_text().strip()!r}")
+        return f"\n  [diag] {', '.join(parts)}"
+    except Exception as exc:
+        return f"\n  [diag] error: {exc}"
+
+
+def start_shielded_container(
+    name: str, extra_args: list[str], image: str, timeout: int = 30
+) -> None:
+    """Start a container with shield args, providing detailed errors on failure.
+
+    Unlike plain ``subprocess.run(..., check=True, capture_output=True)`` which
+    hides stderr, this helper includes the actual podman error message and OCI
+    hook file diagnostics in the exception so hook failures are visible.
+
+    Args:
+        name: Container name.
+        extra_args: Extra arguments from ``shield_pre_start()``.
+        image: Container image to run.
+        timeout: Podman timeout in seconds.
+
+    Raises:
+        RuntimeError: If podman run exits non-zero, with stderr/stdout details.
+    """
+    result = subprocess.run(
+        ["podman", "run", "-d", "--name", name, *extra_args, image, "sleep", "120"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        diag = _hook_diagnostics(extra_args)
+        raise RuntimeError(
+            f"podman run failed (exit {result.returncode}):\n"
+            f"  stderr: {result.stderr.strip()}\n"
+            f"  stdout: {result.stdout.strip()}\n"
+            f"  extra_args: {extra_args}{diag}"
+        )
+
+
+def assert_connectable(container: str, ip: str, port: int = 53, timeout: int = 5) -> None:
+    """Assert that a TCP connection to ip:port succeeds from inside a container.
+
+    Uses ``nc -z`` for a fast, protocol-agnostic connectivity check.
+    Preferred over HTTP-based checks when the target may not serve HTTP
+    (e.g. 8.8.8.8 only serves DNS on port 53, not HTTP on port 80).
+
+    Args:
+        container: Container name or ID.
+        ip: Target IP address.
+        port: Target TCP port (default: 53, DNS).
+        timeout: Connection timeout in seconds.
+    """
+    _assert_container_running(container)
+    r = exec_in_container(
+        container, "nc", "-z", "-w", str(timeout), ip, str(port), timeout=timeout + 5
+    )
+    assert r.returncode == 0, (
+        f"Expected {ip}:{port} to be reachable, but connection failed: {r.stderr}"
+    )
 
 
 def exec_in_container(container: str, *cmd: str, timeout: int = 10) -> subprocess.CompletedProcess:

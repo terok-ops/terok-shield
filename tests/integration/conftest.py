@@ -19,12 +19,17 @@ Makefile targets filter by marker:
 
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from tests.testnet import ALLOWED_TARGET_IPS
+
+from .helpers import start_shielded_container
 
 IMAGE = "docker.io/library/alpine:latest"
 CTR_PREFIX = "shield-itest"
@@ -87,7 +92,33 @@ def _pull_image() -> None:
 
 
 @pytest.fixture(scope="session")
-def nft_in_netns(_pull_image: None) -> None:
+def _verify_connectivity() -> None:
+    """Verify basic internet connectivity from the host (once per session).
+
+    Prevents false positives: if the host can't reach the internet,
+    ``assert_blocked`` passes trivially (traffic is blocked by the network
+    environment, not by terok-shield). Rootless podman with pasta shares
+    the host's network stack, so host connectivity implies container
+    pre-firewall connectivity.
+
+    Raises ``pytest.fail()`` — not ``skip()`` — because broken host networking
+    invalidates all traffic-based test results.
+    """
+    target_ip = ALLOWED_TARGET_IPS[0]
+    try:
+        s = socket.create_connection((target_ip, 53), timeout=5)
+        s.close()
+    except OSError as exc:
+        pytest.fail(
+            f"Pre-flight: cannot reach {target_ip}:53 from the host.\n"
+            "Fix host internet connectivity before running integration tests.\n"
+            "Traffic-based tests would produce false positives when the network "
+            f"is down (assert_blocked passes trivially).\nError: {exc}"
+        )
+
+
+@pytest.fixture(scope="session")
+def nft_in_netns(_pull_image: None, _verify_connectivity: None) -> None:
     """Verify nft works inside a container's network namespace.
 
     Unlike ``podman unshare nft list ruleset`` (which operates on the
@@ -225,13 +256,7 @@ def shielded_container(
 
     try:
         extra_args = shield_pre_start(name, config=cfg)
-
-        subprocess.run(
-            ["podman", "run", "-d", "--name", name, *extra_args, IMAGE, "sleep", "120"],
-            check=True,
-            capture_output=True,
-            timeout=30,
-        )
+        start_shielded_container(name, extra_args, IMAGE)
         yield name
     finally:
         subprocess.run(["podman", "rm", "-f", name], capture_output=True)

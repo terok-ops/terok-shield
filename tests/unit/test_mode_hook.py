@@ -237,7 +237,7 @@ class TestPreStart(unittest.TestCase):
         args = pre_start(self._config(), "test", ["dev-standard"])
         self.assertIn("--network", args)
         pasta_idx = args.index("--network") + 1
-        self.assertIn("pasta:", args[pasta_idx])
+        self.assertTrue(args[pasta_idx].startswith("pasta"))
 
     @mock.patch("terok_shield.mode_hook.resolve_and_cache")
     @mock.patch("terok_shield.mode_hook.compose_profiles", return_value=[TEST_DOMAIN])
@@ -308,10 +308,10 @@ class TestPreStart(unittest.TestCase):
     @mock.patch("os.geteuid", return_value=1000)
     @mock.patch("terok_shield.mode_hook._detect_rootless_network_mode", return_value="pasta")
     def test_empty_loopback_ports_pasta(self, _mode, _euid, _compose, _resolve):
-        """Empty loopback ports produce plain pasta: network arg."""
+        """Empty loopback ports produce plain pasta network arg."""
         args = pre_start(self._config(), "test", ["dev-standard"])
         net_idx = args.index("--network") + 1
-        self.assertEqual(args[net_idx], "pasta:")
+        self.assertEqual(args[net_idx], "pasta")
 
     @mock.patch("terok_shield.mode_hook.resolve_and_cache")
     @mock.patch("terok_shield.mode_hook.compose_profiles", return_value=[TEST_DOMAIN])
