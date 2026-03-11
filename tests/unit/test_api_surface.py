@@ -21,6 +21,7 @@ EXPECTED_ALL = [
     "ShieldConfig",
     "ShieldMode",
     "ShieldState",
+    "configure_audit",
     "list_log_files",
     "list_profiles",
     "load_shield_config",
@@ -137,6 +138,11 @@ class TestAPISurface(unittest.TestCase):
         str_or_none = str | None
 
         cases = [
+            (
+                terok_shield.configure_audit,
+                [("enabled", KW, empty, bool)],
+                None,
+            ),
             (
                 terok_shield.shield_setup,
                 [("config", KW, None, cfg_or_none)],

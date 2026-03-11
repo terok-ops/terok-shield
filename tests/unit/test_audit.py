@@ -9,7 +9,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from terok_shield.audit import list_log_files, log_event, tail_log
+from terok_shield.audit import configure_audit, list_log_files, log_event, tail_log
 
 from ..testnet import TEST_IP1
 
@@ -42,6 +42,34 @@ class TestLogEvent(unittest.TestCase):
             entry = json.loads((Path(tmp) / "test-ctr.jsonl").read_text().strip())
             self.assertEqual(entry["dest"], TEST_IP1)
             self.assertNotIn("detail", entry)
+
+
+class TestConfigureAudit(unittest.TestCase):
+    """Tests for the module-level audit toggle."""
+
+    def tearDown(self) -> None:
+        configure_audit(enabled=True)
+
+    @unittest.mock.patch("terok_shield.audit.shield_logs_dir")
+    def test_skips_when_disabled(self, mock_dir: unittest.mock.Mock) -> None:
+        """No file is written when audit is disabled via configure_audit."""
+        configure_audit(enabled=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            mock_dir.return_value = Path(tmp)
+            log_event("test-ctr", "setup", detail="test")
+            log_file = Path(tmp) / "test-ctr.jsonl"
+            self.assertFalse(log_file.exists())
+
+    @unittest.mock.patch("terok_shield.audit.shield_logs_dir")
+    def test_resumes_after_reenable(self, mock_dir: unittest.mock.Mock) -> None:
+        """Logging resumes after re-enabling audit."""
+        configure_audit(enabled=False)
+        configure_audit(enabled=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            mock_dir.return_value = Path(tmp)
+            log_event("test-ctr", "setup", detail="test")
+            log_file = Path(tmp) / "test-ctr.jsonl"
+            self.assertTrue(log_file.exists())
 
 
 class TestLogPathTraversal(unittest.TestCase):

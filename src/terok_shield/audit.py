@@ -13,6 +13,20 @@ from .config import shield_logs_dir
 
 _SAFE_CONTAINER = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")  # not \w: must exclude Unicode
 
+_audit_enabled: bool = True
+
+
+def configure_audit(*, enabled: bool) -> None:
+    """Set the module-level audit toggle.
+
+    Called once per config load — either from the public API layer
+    (which receives config from the caller) or from ``hook_main``
+    (which reads config from disk).  All subsequent ``log_event``
+    calls respect the setting until it is changed.
+    """
+    global _audit_enabled  # noqa: PLW0603
+    _audit_enabled = enabled
+
 
 def _log_path(container: str) -> Path:
     """Return the audit log path for a container.
@@ -36,12 +50,17 @@ def log_event(
 ) -> None:
     """Write a single audit event to the container's log file.
 
+    Respects the module-level toggle set by :func:`configure_audit`.
+    When audit is disabled the call is a no-op.
+
     Args:
         container: Container name.
         action: Event type (setup, teardown, allowed, denied).
         dest: Destination IP/domain (optional).
         detail: Additional detail string (optional).
     """
+    if not _audit_enabled:
+        return
     entry: dict = {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "container": container,
