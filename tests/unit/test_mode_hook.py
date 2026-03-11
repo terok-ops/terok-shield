@@ -33,10 +33,9 @@ from terok_shield.mode_hook import (
     shield_up,
 )
 from terok_shield.nft import bypass_ruleset, hook_ruleset
-from terok_shield.nft_constants import PRIVATE_RANGES
 from terok_shield.run import ExecError
 
-from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1
+from ..testnet import EXPECTED_PRIVATE_RANGES, IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1
 
 
 class TestDetectRootlessNetworkMode(unittest.TestCase):
@@ -438,7 +437,7 @@ class TestShieldDown(unittest.TestCase):
         ]
         shield_down(self._config(), "test", allow_all=True)
         apply_kwargs = mock_nsenter.call_args_list[0][1]
-        for net in PRIVATE_RANGES:
+        for net in EXPECTED_PRIVATE_RANGES:
             self.assertNotIn(net, apply_kwargs["stdin"])
 
     @mock.patch("terok_shield.mode_hook.nft_via_nsenter")
@@ -626,7 +625,7 @@ class TestPreview(unittest.TestCase):
     def test_down_allow_all(self) -> None:
         """Preview with down=True, allow_all=True omits private-range rules."""
         result = preview(self._config(), down=True, allow_all=True)
-        for net in PRIVATE_RANGES:
+        for net in EXPECTED_PRIVATE_RANGES:
             self.assertNotIn(net, result)
 
     def test_loopback_ports(self) -> None:

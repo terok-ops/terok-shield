@@ -138,8 +138,6 @@ def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> 
                 udp dport 53 {dns_af} daddr {dns} accept
                 tcp dport 53 {dns_af} daddr {dns} accept{port_block}\
         {_audit_allow_rules()}
-                ip daddr @allow_v4 accept
-                ip6 daddr @allow_v6 accept
         {_private_range_rules()}
         {_audit_deny_rule()}
             }}
@@ -228,8 +226,11 @@ def add_elements_dual(ips: list[str], table: str = NFT_TABLE) -> str:
     IPv4 addresses go to ``allow_v4``, IPv6 to ``allow_v6``.
     Returns empty string if no valid IPs.
     """
-    v4 = [ip for ip in ips if _try_validate(ip) and _is_v4(ip)]
-    v6 = [ip for ip in ips if _try_validate(ip) and not _is_v4(ip)]
+    v4: list[str] = []
+    v6: list[str] = []
+    for ip in ips:
+        if _try_validate(ip):
+            (v4 if _is_v4(ip) else v6).append(ip)
     parts: list[str] = []
     cmd = add_elements("allow_v4", v4, table)
     if cmd:

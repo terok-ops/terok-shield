@@ -10,16 +10,11 @@ from pathlib import Path
 
 from .config import shield_resolved_dir
 from .run import dig_all
-from .util import is_ip
+from .util import is_ip as _is_ip
 
 logger = logging.getLogger(__name__)
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
-def _is_ip(entry: str) -> bool:
-    """Return True if `entry` is an IP address or CIDR, False if it's a domain."""
-    return is_ip(entry)
 
 
 def _split_entries(entries: list[str]) -> tuple[list[str], list[str]]:

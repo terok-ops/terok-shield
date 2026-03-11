@@ -81,13 +81,13 @@ def podman_inspect(container: str, fmt: str) -> str:
     return run(["podman", "inspect", "--format", fmt, container]).strip()
 
 
-def dig_all(domain: str) -> list[str]:
+def dig_all(domain: str, *, timeout: int = 10) -> list[str]:
     """Resolve domain to both IPv4 and IPv6 addresses in a single query.
 
     Runs ``dig +short domain A domain AAAA`` and validates each line
-    with ``ipaddress``.  Returns empty list on failure.
+    with ``ipaddress``.  Returns empty list on failure or timeout.
     """
-    out = run(["dig", "+short", domain, "A", domain, "AAAA"], check=False)
+    out = run(["dig", "+short", domain, "A", domain, "AAAA"], check=False, timeout=timeout)
     result: list[str] = []
     for line in out.splitlines():
         addr = line.strip()

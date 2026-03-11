@@ -75,4 +75,16 @@ IPV6_HTTP_URL = f"http://[{IPV6_CLOUDFLARE}]/"  # HTTP via IPv6 literal
 
 IPV6_ULA = "fd00::1"  # Unique Local Address (RFC 4193, fc00::/7)
 IPV6_LINK_LOCAL = "fe80::1"  # Link-local address (RFC 4291, fe80::/10)
+
+# ── Expected private ranges (test-owned, independent from implementation) ──
+# These duplicate the implementation constants intentionally so tests catch
+# accidental removal of a range from the production code.
+EXPECTED_PRIVATE_RANGES: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fc00::/7",
+    "fe80::/10",
+)
 # --8<-- [end:outbound-targets]

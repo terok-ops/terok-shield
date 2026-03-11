@@ -336,9 +336,10 @@ def shield_state(container: str) -> ShieldState:
     if not output.strip():
         return ShieldState.INACTIVE
 
+    if not verify_bypass_ruleset(output, allow_all=False):
+        return ShieldState.DOWN
     if not verify_bypass_ruleset(output, allow_all=True):
-        has_private = "TEROK_SHIELD_PRIVATE" in output
-        return ShieldState.DOWN if has_private else ShieldState.DOWN_ALL
+        return ShieldState.DOWN_ALL
 
     if not verify_ruleset(output):
         return ShieldState.UP

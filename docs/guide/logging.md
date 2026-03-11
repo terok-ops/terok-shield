@@ -22,7 +22,7 @@ Each line is a JSON object:
 | `setup` | Firewall setup step (ruleset applied, IPs loaded, verification) |
 | `allowed` | Domain/IP added to allow set at runtime |
 | `denied` | Domain/IP removed from allow set at runtime |
-| `note` | Advisory event (e.g. RFC1918 or link-local address allowlisted) |
+| `note` | Advisory event (e.g. RFC1918, IPv6 ULA, or link-local address allowlisted) |
 | `error` | Something failed |
 
 ### Viewing logs
