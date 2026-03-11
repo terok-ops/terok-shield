@@ -103,9 +103,7 @@ def assert_not_connectable(container: str, ip: str, port: int = 53, timeout: int
     r = exec_in_container(
         container, "nc", "-z", "-w", str(timeout), ip, str(port), timeout=timeout + 5
     )
-    assert r.returncode != 0, (
-        f"Expected {ip}:{port} to be blocked, but connection succeeded"
-    )
+    assert r.returncode != 0, f"Expected {ip}:{port} to be blocked, but connection succeeded"
 
 
 def exec_in_container(container: str, *cmd: str, timeout: int = 10) -> subprocess.CompletedProcess:
