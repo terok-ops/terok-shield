@@ -2,7 +2,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![REUSE status](https://api.reuse.software/badge/github.com/terok-ai/terok-shield)](https://api.reuse.software/info/github.com/terok-ai/terok-shield)
-[![codecov](https://codecov.io/gh/terok-ai/terok-shield/graph/badge.svg?token=D74Q7lvnIF)](https://codecov.io/gh/terok-ai/terok-shield)
+[![codecov](https://codecov.io/gh/terok-ai/terok-shield/branch/master/graph/badge.svg?token=D74Q7lvnIF)](https://codecov.io/gh/terok-ai/terok-shield)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=terok-ai_terok-shield&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=terok-ai_terok-shield)
 
 nftables-based egress firewalling for rootless Podman containers.
