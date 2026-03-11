@@ -18,10 +18,9 @@ import textwrap
 
 from .nft_constants import (
     BYPASS_LOG_PREFIX,
-    IPV6_PRIVATE,
     NFT_TABLE,
     PASTA_DNS,
-    RFC1918,
+    PRIVATE_RANGES,
 )
 
 # ── Validation ───────────────────────────────────────────
@@ -66,19 +65,16 @@ def _is_v4(value: str) -> bool:
 # ── Rulesets ─────────────────────────────────────────────
 
 
-def _rfc1918_rules(prefix: str = "TEROK_SHIELD_RFC1918") -> str:
-    """Generate RFC1918 reject rules.  Used by both modes."""
-    return "\n".join(
-        f'        ip daddr {net} log prefix "{prefix}: " reject with icmp type admin-prohibited'
-        for net in RFC1918
-    )
+def _private_range_rules(prefix: str = "TEROK_SHIELD_PRIVATE") -> str:
+    """Generate private-range reject rules (RFC1918 + IPv6 ULA/link-local).
 
-
-def _ipv6_private_rules(prefix: str = "TEROK_SHIELD_PRIVATE_V6") -> str:
-    """Generate IPv6 private-range reject rules (ULA + link-local)."""
+    Auto-detects address family for the ``daddr`` selector and uses
+    cross-family ``icmpx`` reject for all ranges.
+    """
     return "\n".join(
-        f'        ip6 daddr {net} log prefix "{prefix}: " reject with icmpv6 type admin-prohibited'
-        for net in IPV6_PRIVATE
+        f"        {'ip' if _is_v4(net) else 'ip6'} daddr {net}"
+        f' log prefix "{prefix}: " reject with icmpx admin-prohibited'
+        for net in PRIVATE_RANGES
     )
 
 
@@ -118,7 +114,7 @@ def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> 
     Dual-stack: both IPv4 and IPv6 use deny-all + allowlist.
 
     Chain order (output):
-        loopback -> established -> DNS -> loopback ports -> allow sets -> RFC1918/v6-private reject -> deny
+        loopback -> established -> DNS -> loopback ports -> allow sets -> private-range reject -> deny
 
     Args:
         dns: DNS server address (pasta default forwarder).
@@ -143,8 +139,7 @@ def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> 
         {_audit_allow_rules()}
                 ip daddr @allow_v4 accept
                 ip6 daddr @allow_v6 accept
-        {_rfc1918_rules()}
-        {_ipv6_private_rules()}
+        {_private_range_rules()}
         {_audit_deny_rule()}
             }}
 
@@ -170,7 +165,7 @@ def bypass_ruleset(
 
     Same structure as ``hook_ruleset()`` but output chain policy is accept
     and new connections are logged with the bypass prefix.  Private-range
-    reject rules (RFC1918 + IPv6 ULA/link-local) are kept unless
+    reject rules (private ranges) are kept unless
     *allow_all* is True.
 
     Args:
@@ -183,7 +178,7 @@ def bypass_ruleset(
         _safe_port(p)
     port_rules = _loopback_port_rules(loopback_ports)
     port_block = f"\n{port_rules}\n" if port_rules else "\n"
-    private_block = "" if allow_all else f"\n{_rfc1918_rules()}\n{_ipv6_private_rules()}"
+    private_block = "" if allow_all else f"\n{_private_range_rules()}"
     bypass_log = f'        ct state new log prefix "{BYPASS_LOG_PREFIX}: " counter'
     return textwrap.dedent(f"""\
         table {NFT_TABLE} {{
@@ -246,27 +241,19 @@ def add_elements_dual(ips: list[str], table: str = NFT_TABLE) -> str:
 # ── Verification ─────────────────────────────────────────
 
 
-def _verify_rfc1918_blocks(nft_output: str) -> list[str]:
-    """Check RFC1918 reject rules are present in the ruleset.
+def _verify_private_blocks(nft_output: str) -> list[str]:
+    """Check private-range reject rules (RFC1918 + IPv6) are present.
 
-    Uses a regex to match reject rule context (``ip daddr <net> ... reject``)
+    Uses a regex to match reject rule context (``ip[6] daddr <net> ... reject``)
     rather than bare CIDR presence, so set elements don't produce false passes.
+    Auto-detects address family from the CIDR.
     """
     errors: list[str] = []
-    for net in RFC1918:
-        pattern = rf"ip daddr {re.escape(net)}.*reject"
+    for net in PRIVATE_RANGES:
+        selector = "ip" if _is_v4(net) else "ip6"
+        pattern = rf"{selector} daddr {re.escape(net)}.*reject"
         if not re.search(pattern, nft_output):
-            errors.append(f"RFC1918 reject rule for {net} missing")
-    return errors
-
-
-def _verify_ipv6_private_blocks(nft_output: str) -> list[str]:
-    """Check IPv6 private-range reject rules are present."""
-    errors: list[str] = []
-    for net in IPV6_PRIVATE:
-        pattern = rf"ip6 daddr {re.escape(net)}.*reject"
-        if not re.search(pattern, nft_output):
-            errors.append(f"IPv6 private reject rule for {net} missing")
+            errors.append(f"Private-range reject rule for {net} missing")
     return errors
 
 
@@ -278,8 +265,7 @@ def verify_ruleset(nft_output: str) -> list[str]:
     - Both output and input chains exist
     - Reject type is present
     - Deny log prefix is present
-    - All RFC1918 ranges are present (reject rules for non-whitelisted LAN traffic)
-    - All IPv6 private ranges are present
+    - All private ranges are present (RFC1918 + IPv6 ULA/link-local)
     - Dual-stack allow sets are declared
     """
     errors: list[str] = []
@@ -294,8 +280,7 @@ def verify_ruleset(nft_output: str) -> list[str]:
         errors.append("deny log prefix missing")
     if "allow_v6" not in nft_output:
         errors.append("allow_v6 set missing")
-    errors.extend(_verify_rfc1918_blocks(nft_output))
-    errors.extend(_verify_ipv6_private_blocks(nft_output))
+    errors.extend(_verify_private_blocks(nft_output))
     return errors
 
 

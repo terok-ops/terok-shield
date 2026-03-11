@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .config import shield_resolved_dir
-from .run import dig, dig_aaaa
+from .run import dig_all
 from .util import is_ip
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def resolve_domains(domains: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for domain in domains:
-        ips = dig(domain) + dig_aaaa(domain)
+        ips = dig_all(domain)
         if not ips:
             logger.warning("Domain %r resolved to no IPs (typo or DNS failure?)", domain)
         for ip in ips:

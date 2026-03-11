@@ -89,7 +89,7 @@ class TestBypassPreviewCLI:
         main(["preview", "--down", "--all"])
         captured = capsys.readouterr()
         assert "policy accept" in captured.out
-        assert "TEROK_SHIELD_RFC1918" not in captured.out
+        assert "TEROK_SHIELD_PRIVATE" not in captured.out
 
     def test_preview_all_without_down_fails(self, capsys: pytest.CaptureFixture) -> None:
         """``preview --all`` without ``--down`` exits with error."""

@@ -8,8 +8,6 @@ import unittest.mock
 
 from terok_shield.run import (
     ExecError,
-    dig,
-    dig_aaaa,
     dig_all,
     has,
     nft,
@@ -169,78 +167,42 @@ class TestPodmanInspect(unittest.TestCase):
         self.assertEqual(result, "12345")
 
 
-class TestDig(unittest.TestCase):
-    """Tests for dig()."""
+class TestDigAll(unittest.TestCase):
+    """Tests for dig_all() — single-query dual-stack DNS resolution."""
 
     @unittest.mock.patch("terok_shield.run.run")
-    def test_returns_ips(self, mock_run: unittest.mock.Mock) -> None:
-        """Extract IPv4 addresses from dig output."""
-        mock_run.return_value = f"{TEST_IP1}\n{TEST_IP2}\n"
-        result = dig("example.com")
-        self.assertEqual(result, [TEST_IP1, TEST_IP2])
+    def test_returns_v4_and_v6(self, mock_run: unittest.mock.Mock) -> None:
+        """Extract both IPv4 and IPv6 addresses from combined dig output."""
+        mock_run.return_value = f"{TEST_IP1}\n{TEST_IP2}\n{IPV6_CLOUDFLARE}\n"
+        result = dig_all("example.com")
+        self.assertEqual(result, [TEST_IP1, TEST_IP2, IPV6_CLOUDFLARE])
 
     @unittest.mock.patch("terok_shield.run.run")
     def test_filters_non_ip(self, mock_run: unittest.mock.Mock) -> None:
         """Filter out CNAME and other non-IP lines."""
-        mock_run.return_value = f"alias.example.com.\n{TEST_IP1}\n"
-        result = dig("example.com")
-        self.assertEqual(result, [TEST_IP1])
-
-    @unittest.mock.patch("terok_shield.run.run")
-    def test_empty_on_failure(self, mock_run: unittest.mock.Mock) -> None:
-        """Return empty list when dig exits non-zero (check=False returns empty)."""
-        mock_run.return_value = ""
-        result = dig("nonexistent.invalid")
-        self.assertEqual(result, [])
-
-    @unittest.mock.patch("subprocess.run", side_effect=FileNotFoundError("dig not found"))
-    def test_empty_on_missing_binary(self, _mock_run: unittest.mock.Mock) -> None:
-        """Return empty list when dig binary is missing."""
-        result = dig("example.com")
-        self.assertEqual(result, [])
-
-
-class TestDigAaaa(unittest.TestCase):
-    """Tests for dig_aaaa()."""
-
-    @unittest.mock.patch("terok_shield.run.run")
-    def test_returns_ipv6(self, mock_run: unittest.mock.Mock) -> None:
-        """Extract IPv6 addresses from dig AAAA output."""
-        mock_run.return_value = "2606:4700:4700::1111\n2606:4700:4700::1001\n"
-        result = dig_aaaa("example.com")
-        self.assertEqual(result, ["2606:4700:4700::1111", "2606:4700:4700::1001"])
-
-    @unittest.mock.patch("terok_shield.run.run")
-    def test_filters_non_ip(self, mock_run: unittest.mock.Mock) -> None:
-        """Filter out CNAME and other non-IPv6 lines."""
-        mock_run.return_value = f"alias.example.com.\n{IPV6_CLOUDFLARE}\n"
-        result = dig_aaaa("example.com")
-        self.assertEqual(result, [IPV6_CLOUDFLARE])
-
-    @unittest.mock.patch("terok_shield.run.run")
-    def test_empty_on_failure(self, mock_run: unittest.mock.Mock) -> None:
-        """Return empty list when dig exits non-zero (check=False returns empty)."""
-        mock_run.return_value = ""
-        result = dig_aaaa("nonexistent.invalid")
-        self.assertEqual(result, [])
-
-    @unittest.mock.patch("subprocess.run", side_effect=FileNotFoundError("dig not found"))
-    def test_empty_on_missing_binary(self, _mock_run: unittest.mock.Mock) -> None:
-        """Return empty list when dig binary is missing."""
-        result = dig_aaaa("example.com")
-        self.assertEqual(result, [])
-
-
-class TestDigAll(unittest.TestCase):
-    """Tests for dig_all()."""
-
-    @unittest.mock.patch("terok_shield.run.dig_aaaa")
-    @unittest.mock.patch("terok_shield.run.dig")
-    def test_combines_v4_and_v6(
-        self, mock_dig: unittest.mock.Mock, mock_dig_aaaa: unittest.mock.Mock
-    ) -> None:
-        """Combine IPv4 and IPv6 results from dig and dig_aaaa."""
-        mock_dig.return_value = [TEST_IP1]
-        mock_dig_aaaa.return_value = [IPV6_CLOUDFLARE]
+        mock_run.return_value = f"alias.example.com.\n{TEST_IP1}\n{IPV6_CLOUDFLARE}\n"
         result = dig_all("example.com")
         self.assertEqual(result, [TEST_IP1, IPV6_CLOUDFLARE])
+
+    @unittest.mock.patch("terok_shield.run.run")
+    def test_empty_on_failure(self, mock_run: unittest.mock.Mock) -> None:
+        """Return empty list when dig returns empty (check=False)."""
+        mock_run.return_value = ""
+        result = dig_all("nonexistent.invalid")
+        self.assertEqual(result, [])
+
+    @unittest.mock.patch("subprocess.run", side_effect=FileNotFoundError("dig not found"))
+    def test_empty_on_missing_binary(self, _mock_run: unittest.mock.Mock) -> None:
+        """Return empty list when dig binary is missing."""
+        result = dig_all("example.com")
+        self.assertEqual(result, [])
+
+    @unittest.mock.patch("terok_shield.run.run")
+    def test_single_query_call(self, mock_run: unittest.mock.Mock) -> None:
+        """Uses a single dig subprocess with both A and AAAA queries."""
+        mock_run.return_value = f"{TEST_IP1}\n"
+        dig_all("example.com")
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("A", cmd)
+        self.assertIn("AAAA", cmd)

@@ -427,7 +427,7 @@ class TestShieldDown(unittest.TestCase):
         ]
         shield_down(self._config(), "test", allow_all=True)
         apply_kwargs = mock_nsenter.call_args_list[0][1]
-        self.assertNotIn("RFC1918", apply_kwargs["stdin"])
+        self.assertNotIn("10.0.0.0/8", apply_kwargs["stdin"])
 
     @mock.patch("terok_shield.mode_hook.nft_via_nsenter")
     def test_verification_failure_raises(self, mock_nsenter):
@@ -604,9 +604,9 @@ class TestPreview(unittest.TestCase):
         self.assertNotIn("TEROK_SHIELD_DENIED", result)
 
     def test_down_allow_all(self) -> None:
-        """Preview with down=True, allow_all=True omits RFC1918."""
+        """Preview with down=True, allow_all=True omits private-range rules."""
         result = preview(self._config(), down=True, allow_all=True)
-        self.assertNotIn("RFC1918", result)
+        self.assertNotIn("10.0.0.0/8", result)
 
     def test_loopback_ports(self) -> None:
         """Preview includes loopback ports from config."""

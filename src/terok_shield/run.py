@@ -3,11 +3,9 @@
 
 """Subprocess helpers for shield.  Every external command goes through here."""
 
-import re
+import ipaddress as _ipaddress
 import shutil
 import subprocess
-
-_IPV4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 
 
 class ExecError(Exception):
@@ -73,29 +71,21 @@ def podman_inspect(container: str, fmt: str) -> str:
     return run(["podman", "inspect", "--format", fmt, container]).strip()
 
 
-def dig(domain: str) -> list[str]:
-    """Resolve domain to a list of IPv4 addresses.  Empty on failure."""
-    out = run(["dig", "+short", "A", domain], check=False)
-    return [line.strip() for line in out.splitlines() if _IPV4.match(line.strip())]
+def dig_all(domain: str) -> list[str]:
+    """Resolve domain to both IPv4 and IPv6 addresses in a single query.
 
-
-def dig_aaaa(domain: str) -> list[str]:
-    """Resolve domain to a list of IPv6 addresses.  Empty on failure."""
-    import ipaddress as _ipaddress
-
-    out = run(["dig", "+short", "AAAA", domain], check=False)
+    Runs ``dig +short domain A domain AAAA`` and validates each line
+    with ``ipaddress``.  Returns empty list on failure.
+    """
+    out = run(["dig", "+short", domain, "A", domain, "AAAA"], check=False)
     result: list[str] = []
     for line in out.splitlines():
         addr = line.strip()
-        if addr:
-            try:
-                _ipaddress.IPv6Address(addr)
-                result.append(addr)
-            except ValueError:
-                continue
+        if not addr:
+            continue
+        try:
+            _ipaddress.ip_address(addr)
+            result.append(addr)
+        except ValueError:
+            continue
     return result
-
-
-def dig_all(domain: str) -> list[str]:
-    """Resolve domain to both IPv4 and IPv6 addresses.  Empty on failure."""
-    return dig(domain) + dig_aaaa(domain)

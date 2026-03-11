@@ -126,7 +126,7 @@ class TestBypassModeSwitch:
 
         # RFC1918 rules should be gone
         rules = shield_rules(shielded_container)
-        assert "TEROK_SHIELD_RFC1918" not in rules
+        assert "TEROK_SHIELD_PRIVATE" not in rules
 
     def test_down_all_to_down(self, shielded_container: str) -> None:
         """Switch from full bypass back to protected bypass."""
@@ -138,7 +138,7 @@ class TestBypassModeSwitch:
 
         # RFC1918 rules should be restored
         rules = shield_rules(shielded_container)
-        assert "TEROK_SHIELD_RFC1918" in rules
+        assert "TEROK_SHIELD_PRIVATE" in rules
 
 
 @pytest.mark.needs_podman

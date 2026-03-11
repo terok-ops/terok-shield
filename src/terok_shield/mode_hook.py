@@ -334,7 +334,7 @@ def shield_state(container: str) -> ShieldState:
         return ShieldState.INACTIVE
 
     if not verify_bypass_ruleset(output):
-        has_rfc1918 = "TEROK_SHIELD_RFC1918" in output
+        has_rfc1918 = "TEROK_SHIELD_PRIVATE" in output
         return ShieldState.DOWN if has_rfc1918 else ShieldState.DOWN_ALL
 
     if not verify_ruleset(output):

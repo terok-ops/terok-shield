@@ -31,5 +31,9 @@ IPV6_PRIVATE: tuple[str, ...] = (
     "fe80::/10",
 )
 
+# Combined private ranges (RFC1918 + IPv6 private) — single source of truth
+# for rule generation and verification.
+PRIVATE_RANGES: tuple[str, ...] = RFC1918 + IPV6_PRIVATE
+
 # ── Log prefixes ───────────────────────────────────────
 BYPASS_LOG_PREFIX = "TEROK_SHIELD_BYPASS"

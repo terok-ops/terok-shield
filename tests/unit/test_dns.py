@@ -70,61 +70,41 @@ class TestSplitEntries(unittest.TestCase):
 class TestResolveDomains(unittest.TestCase):
     """Tests for resolve_domains."""
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
-    def test_resolves_multiple(
-        self, mock_dig: unittest.mock.Mock, mock_dig_aaaa: unittest.mock.Mock
-    ) -> None:
+    @unittest.mock.patch("terok_shield.dns.dig_all")
+    def test_resolves_multiple(self, mock_dig_all: unittest.mock.Mock) -> None:
         """Resolve multiple domains and deduplicate."""
-        mock_dig.side_effect = [[TEST_IP1], [TEST_IP2]]
-        mock_dig_aaaa.side_effect = [[IPV6_CLOUDFLARE], []]
+        mock_dig_all.side_effect = [[TEST_IP1, IPV6_CLOUDFLARE], [TEST_IP2]]
         result = resolve_domains(["a.com", "b.com"])
         self.assertEqual(result, [TEST_IP1, IPV6_CLOUDFLARE, TEST_IP2])
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
-    def test_skips_failed(
-        self, mock_dig: unittest.mock.Mock, mock_dig_aaaa: unittest.mock.Mock
-    ) -> None:
+    @unittest.mock.patch("terok_shield.dns.dig_all")
+    def test_skips_failed(self, mock_dig_all: unittest.mock.Mock) -> None:
         """Skip domains that fail to resolve."""
-        mock_dig.side_effect = [[TEST_IP1], []]
-        mock_dig_aaaa.side_effect = [[], []]
+        mock_dig_all.side_effect = [[TEST_IP1], []]
         result = resolve_domains(["good.com", "bad.com"])
         self.assertEqual(result, [TEST_IP1])
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
-    def test_logs_warning_for_unresolvable(
-        self, mock_dig: unittest.mock.Mock, mock_dig_aaaa: unittest.mock.Mock
-    ) -> None:
+    @unittest.mock.patch("terok_shield.dns.dig_all")
+    def test_logs_warning_for_unresolvable(self, mock_dig_all: unittest.mock.Mock) -> None:
         """Log warning when a domain resolves to no IPs."""
-        mock_dig.side_effect = [[TEST_IP1], []]
-        mock_dig_aaaa.side_effect = [[], []]
+        mock_dig_all.side_effect = [[TEST_IP1], []]
         with self.assertLogs("terok_shield.dns", level="WARNING") as cm:
             resolve_domains(["good.com", "bad.com"])
         self.assertEqual(len(cm.output), 1)
         self.assertIn("bad.com", cm.output[0])
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
-    def test_no_warning_when_all_resolve(
-        self, mock_dig: unittest.mock.Mock, mock_dig_aaaa: unittest.mock.Mock
-    ) -> None:
+    @unittest.mock.patch("terok_shield.dns.dig_all")
+    def test_no_warning_when_all_resolve(self, mock_dig_all: unittest.mock.Mock) -> None:
         """No warning when all domains resolve successfully."""
-        mock_dig.side_effect = [[TEST_IP1], [TEST_IP2]]
-        mock_dig_aaaa.side_effect = [[], []]
+        mock_dig_all.side_effect = [[TEST_IP1], [TEST_IP2]]
         with self.assertNoLogs("terok_shield.dns", level="WARNING"):
             resolve_domains(["good.com", "also-good.com"])
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
-    def test_empty_input(
-        self, mock_dig: unittest.mock.Mock, mock_dig_aaaa: unittest.mock.Mock
-    ) -> None:
+    @unittest.mock.patch("terok_shield.dns.dig_all")
+    def test_empty_input(self, mock_dig_all: unittest.mock.Mock) -> None:
         """Empty domain list returns empty result."""
         result = resolve_domains([])
-        mock_dig.assert_not_called()
-        mock_dig_aaaa.assert_not_called()
+        mock_dig_all.assert_not_called()
         self.assertEqual(result, [])
 
 
@@ -196,14 +176,12 @@ class TestCachePath(unittest.TestCase):
 class TestResolveAndCache(unittest.TestCase):
     """Tests for resolve_and_cache."""
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
+    @unittest.mock.patch("terok_shield.dns.dig_all")
     @unittest.mock.patch("terok_shield.dns.shield_resolved_dir")
     def test_resolves_and_writes_cache(
         self,
         mock_dir: unittest.mock.Mock,
-        mock_dig: unittest.mock.Mock,
-        mock_dig_aaaa: unittest.mock.Mock,
+        mock_dig_all: unittest.mock.Mock,
     ) -> None:
         """Resolve domains and write cache file."""
         import tempfile
@@ -211,22 +189,19 @@ class TestResolveAndCache(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             mock_dir.return_value = Path(tmp)
-            mock_dig.return_value = [TEST_IP1]
-            mock_dig_aaaa.return_value = []
+            mock_dig_all.return_value = [TEST_IP1]
             result = resolve_and_cache(["example.com"], "test-ctr")
             self.assertEqual(result, [TEST_IP1])
             cache = Path(tmp) / "test-ctr.resolved"
             self.assertTrue(cache.is_file())
             self.assertIn(TEST_IP1, cache.read_text())
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
+    @unittest.mock.patch("terok_shield.dns.dig_all")
     @unittest.mock.patch("terok_shield.dns.shield_resolved_dir")
     def test_returns_cached_if_fresh(
         self,
         mock_dir: unittest.mock.Mock,
-        mock_dig: unittest.mock.Mock,
-        mock_dig_aaaa: unittest.mock.Mock,
+        mock_dig_all: unittest.mock.Mock,
     ) -> None:
         """Return cached IPs without resolving if cache is fresh."""
         import tempfile
@@ -238,17 +213,14 @@ class TestResolveAndCache(unittest.TestCase):
             cache.write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
             result = resolve_and_cache(["example.com"], "test-ctr", max_age=3600)
             self.assertEqual(result, [TEST_IP1, TEST_IP2])
-            mock_dig.assert_not_called()
-            mock_dig_aaaa.assert_not_called()
+            mock_dig_all.assert_not_called()
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
+    @unittest.mock.patch("terok_shield.dns.dig_all")
     @unittest.mock.patch("terok_shield.dns.shield_resolved_dir")
     def test_re_resolves_stale_cache(
         self,
         mock_dir: unittest.mock.Mock,
-        mock_dig: unittest.mock.Mock,
-        mock_dig_aaaa: unittest.mock.Mock,
+        mock_dig_all: unittest.mock.Mock,
     ) -> None:
         """Re-resolve when cache is stale."""
         import os
@@ -260,20 +232,17 @@ class TestResolveAndCache(unittest.TestCase):
             cache = Path(tmp) / "test-ctr.resolved"
             cache.write_text(f"{TEST_IP1}\n")
             os.utime(cache, (0, 0))  # epoch = very stale
-            mock_dig.return_value = [TEST_IP2]
-            mock_dig_aaaa.return_value = []
+            mock_dig_all.return_value = [TEST_IP2]
             result = resolve_and_cache(["example.com"], "test-ctr", max_age=3600)
             self.assertEqual(result, [TEST_IP2])
-            mock_dig.assert_called_once()
+            mock_dig_all.assert_called_once()
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
+    @unittest.mock.patch("terok_shield.dns.dig_all")
     @unittest.mock.patch("terok_shield.dns.shield_resolved_dir")
     def test_mixed_entries(
         self,
         mock_dir: unittest.mock.Mock,
-        mock_dig: unittest.mock.Mock,
-        mock_dig_aaaa: unittest.mock.Mock,
+        mock_dig_all: unittest.mock.Mock,
     ) -> None:
         """Handle mix of domains and raw IPs."""
         import tempfile
@@ -281,20 +250,17 @@ class TestResolveAndCache(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             mock_dir.return_value = Path(tmp)
-            mock_dig.return_value = [TEST_IP2]
-            mock_dig_aaaa.return_value = []
+            mock_dig_all.return_value = [TEST_IP2]
             result = resolve_and_cache([TEST_IP1, "example.com"], "test-ctr")
             self.assertIn(TEST_IP1, result)
             self.assertIn(TEST_IP2, result)
 
-    @unittest.mock.patch("terok_shield.dns.dig_aaaa")
-    @unittest.mock.patch("terok_shield.dns.dig")
+    @unittest.mock.patch("terok_shield.dns.dig_all")
     @unittest.mock.patch("terok_shield.dns.shield_resolved_dir")
     def test_fresh_cache_ignores_changed_entries(
         self,
         mock_dir: unittest.mock.Mock,
-        mock_dig: unittest.mock.Mock,
-        mock_dig_aaaa: unittest.mock.Mock,
+        mock_dig_all: unittest.mock.Mock,
     ) -> None:
         """Fresh cache returns cached IPs regardless of new entries."""
         import tempfile
@@ -303,11 +269,10 @@ class TestResolveAndCache(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             mock_dir.return_value = Path(tmp)
             # First call: resolve and cache
-            mock_dig.return_value = [TEST_IP1]
-            mock_dig_aaaa.return_value = []
+            mock_dig_all.return_value = [TEST_IP1]
             resolve_and_cache(["example.com"], "test-ctr")
             # Second call with different entries — cache is still fresh
             result = resolve_and_cache(["other.example.com"], "test-ctr", max_age=3600)
             self.assertEqual(result, [TEST_IP1])
-            # dig was only called once (for the first resolve)
-            mock_dig.assert_called_once()
+            # dig_all was only called once (for the first resolve)
+            mock_dig_all.assert_called_once()
