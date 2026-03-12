@@ -90,9 +90,8 @@ Breaking this down:
 5. If any step fails, the container is torn down (fail-closed)
 
 From inside the container, only the allowed destinations are reachable.
-All other outbound traffic is dropped. Allowlisting RFC1918 (private
-networks), link-local addresses, or large CIDRs generates a notice in
-the audit log.
+All other outbound traffic is dropped. Allowlisting private-range addresses
+(RFC 1918, RFC 4193) or large CIDRs generates a notice in the audit log.
 
 ## Allow or deny destinations at runtime
 
@@ -128,8 +127,8 @@ terok-shield logs --container my-container -n 10
 Temporarily disable the firewall for debugging or traffic discovery:
 
 ```bash
-terok-shield down my-container          # accept-all (RFC1918 still blocked)
-terok-shield down my-container --all    # accept everything including RFC1918
+terok-shield down my-container          # bypass (private ranges still blocked)
+terok-shield down my-container --all    # bypass everything
 
 terok-shield up my-container            # restore deny-all
 ```

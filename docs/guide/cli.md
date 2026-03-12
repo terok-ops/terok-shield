@@ -95,7 +95,7 @@ The IP is also removed from `live.allowed`.
 ## down
 
 Switch a container to bypass mode. Public traffic is accepted with logging;
-RFC1918/link-local ranges remain blocked unless `--all` is used.
+private ranges (RFC 1918/RFC 4193) remain blocked unless `--all` is used.
 
 ```bash
 terok-shield down <container> [--all]
@@ -104,10 +104,10 @@ terok-shield down <container> [--all]
 | Argument | Description |
 |----------|-------------|
 | `container` | Container name or ID |
-| `--all` | Also allow RFC1918/link-local traffic |
+| `--all` | Also allow private-range traffic (RFC 1918/RFC 4193) |
 
-By default, RFC1918 and IPv6 private ranges are still rejected in bypass
-mode. Use `--all` to allow everything.
+By default, private ranges (RFC 1918 and RFC 4193) are still rejected in
+bypass mode. Use `--all` to allow everything.
 
 ## up
 
@@ -131,7 +131,7 @@ terok-shield preview [--down] [--all]
 | Option | Description |
 |--------|-------------|
 | `--down` | Show bypass ruleset instead of default deny-all |
-| `--all` | Omit RFC1918 reject rules (requires `--down`) |
+| `--all` | Omit private-range reject rules (requires `--down`) |
 
 ## rules
 

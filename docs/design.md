@@ -48,7 +48,7 @@ Each container has its own audit log at `{state_dir}/audit.jsonl`. Each
 ```
 
 Detail lines prefixed with `[ips]` contain full IP lists. The `"note"` action
-is used for RFC1918 and link-local allowlisting events. Audit logging is
+is used for private-range (RFC 1918/RFC 4193) allowlisting events. Audit logging is
 best-effort — failures are silently ignored to avoid blocking container
 operations.
 
@@ -58,7 +58,7 @@ nftables log rules generate per-packet entries in dmesg/journald:
 
 - `TEROK_SHIELD_ALLOWED:` — traffic hitting the allow set (rate-limited)
 - `TEROK_SHIELD_DENIED:` — traffic rejected by the deny-all rule
-- `TEROK_SHIELD_RFC1918:` — non-allowlisted RFC1918 traffic rejected
+- `TEROK_SHIELD_PRIVATE:` — non-allowlisted private-range traffic rejected (RFC 1918/RFC 4193)
 
 ## Public API
 

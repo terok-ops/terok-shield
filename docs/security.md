@@ -17,8 +17,8 @@ rootless Podman's user namespace.
 
 - Default-deny outbound connectivity
 - Allowlist-based access to specific destinations (domains or IPs)
-- Block RFC1918/link-local traffic unless explicitly allowlisted (prevent lateral movement)
-- Log a notice when RFC1918, link-local addresses, or large CIDRs are allowlisted
+- Block private-range traffic (RFC 1918 + RFC 4193) unless explicitly allowlisted (prevent lateral movement)
+- Log a notice when private addresses or large CIDRs are allowlisted
 - Audit log all firewall events
 - Fail closed on any hook failure
 
@@ -46,7 +46,7 @@ scan.
 
 **Self-verification:** `verify_ruleset()` checks post-apply invariants: drop
 policy present, reject type present, deny log prefix present, all private ranges
-(RFC1918 + IPv6 ULA/link-local) blocked, both allow sets declared.
+(RFC 1918 + RFC 4193/4291) blocked, both allow sets declared.
 `verify_bypass_ruleset()` additionally checks private-range rules when
 `allow_all=False`.
 
@@ -65,7 +65,7 @@ policy present, reject type present, deny log prefix present, all private ranges
 │  │  │                               │  │   │
 │  │  │  policy: DROP                 │  │   │
 │  │  │  allow: DNS, lo, @allow_v4/v6  │  │   │
-│  │  │  reject: RFC1918, v6-private  │  │   │
+│  │  │  reject: RFC1918, RFC4193     │  │   │
 │  │  └────────────────────────────────┘  │   │
 │  │                                      │   │
 │  │  ┌────────────────────────────────┐  │   │
@@ -93,7 +93,7 @@ loopback → established → DNS → loopback ports → allow_v4/v6 → private-
 
 **Rule ordering rationale:** the allow sets (`@allow_v4`, `@allow_v6`) are
 evaluated *before* private-range reject rules. This lets operators allowlist
-specific RFC1918 or IPv6 ULA addresses (e.g., local infrastructure) via
+specific RFC 1918 or RFC 4193 addresses (e.g., local infrastructure) via
 allowlist profiles. Allowlisting private addresses or large CIDRs is logged
 with action `"note"` in the audit trail.
 

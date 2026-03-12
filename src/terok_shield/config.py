@@ -35,8 +35,8 @@ class ShieldState(enum.Enum):
     """Per-container shield state, derived from the live nft ruleset.
 
     UP: Normal enforcing mode (deny-all).
-    DOWN: Bypass mode with RFC1918 protection.
-    DOWN_ALL: Bypass mode without RFC1918 protection.
+    DOWN: Bypass mode with private-range protection (RFC 1918 + RFC 4193).
+    DOWN_ALL: Bypass mode without private-range protection.
     INACTIVE: No ruleset found (container stopped or unshielded).
     ERROR: Ruleset present but unrecognised.
     """

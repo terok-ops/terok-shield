@@ -202,7 +202,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="allow_all",
-        help="Also allow RFC1918/link-local traffic",
+        help="Also allow private-range traffic (RFC 1918 + RFC 4193)",
     )
 
     p_up = sub.add_parser("up", help="Restore deny-all mode for a container")
@@ -220,7 +220,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="allow_all",
-        help="Omit RFC1918 reject rules (requires --down)",
+        help="Omit private-range reject rules (requires --down)",
     )
 
     p_rules = sub.add_parser("rules", help="Show current nft rules for a container")

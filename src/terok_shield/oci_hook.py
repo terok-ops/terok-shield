@@ -75,7 +75,7 @@ def _is_private_addr(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> boo
 def _classify_ips(ips: list[str]) -> tuple[list[str], list[str]]:
     """Classify IPs into private-range and broad-range lists for logging.
 
-    Handles both IPv4 (RFC1918/link-local) and IPv6 (ULA/link-local).
+    Handles both IPv4 (RFC 1918/RFC 3927) and IPv6 (RFC 4193/RFC 4291).
 
     Returns:
         Tuple of (private_ips, broad_cidrs). Does not affect which IPs

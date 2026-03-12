@@ -15,23 +15,23 @@ NFT_TABLE_NAME = "terok_shield"
 
 PASTA_DNS = "169.254.1.1"  # pasta default DNS forwarder (link-local)
 
-# RFC1918 + link-local ranges: rejected by default, access attempts
-# and whitelisting logged with a notice.
+# RFC 1918 private ranges + RFC 3927 link-local: rejected by default,
+# access attempts and whitelisting logged with a notice.
 RFC1918: tuple[str, ...] = (
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-    "169.254.0.0/16",
+    "10.0.0.0/8",  # RFC 1918
+    "172.16.0.0/12",  # RFC 1918
+    "192.168.0.0/16",  # RFC 1918
+    "169.254.0.0/16",  # RFC 3927 (IPv4 link-local)
 )
 
-# IPv6 private ranges: ULA (RFC 4193) + link-local (RFC 4291).
-# Same treatment as RFC1918 — rejected by default, logged when whitelisted.
+# RFC 4193 (ULA) + RFC 4291 (link-local): IPv6 equivalents of RFC 1918.
+# Same treatment — rejected by default, logged when whitelisted.
 IPV6_PRIVATE: tuple[str, ...] = (
-    "fc00::/7",
-    "fe80::/10",
+    "fc00::/7",  # RFC 4193 (Unique Local Addresses)
+    "fe80::/10",  # RFC 4291 (link-local)
 )
 
-# Combined private ranges (RFC1918 + IPv6 private) — single source of truth
+# Combined private ranges (RFC 1918 + RFC 4193/4291) — single source of truth
 # for rule generation and verification.
 PRIVATE_RANGES: tuple[str, ...] = RFC1918 + IPV6_PRIVATE
 

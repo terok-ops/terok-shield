@@ -88,7 +88,7 @@ make spdx NAME="Real Human Name" FILES="src/terok_shield/new_file.py"  # Add SPD
 `nft.py` is the auditable security boundary:
 - **Only stdlib + `nft_constants.py` imports** (`ipaddress`, `re`, `textwrap`, and the literals-only `nft_constants`)
 - All inputs validated (`safe_ip()`, `safe_name()`) before string interpolation
-- Allowlisting RFC1918 addresses or large CIDRs generates a notice in the audit log
+- Allowlisting private-range addresses (RFC 1918/RFC 4193) or large CIDRs generates a notice in the audit log
 - Enforced by AST import isolation test + bandit SAST
 
 ## Module Boundaries (tach)
@@ -117,7 +117,7 @@ Integration tests live in `tests/integration/` and are organized by **workflow/f
 |-----------|--------------|
 | `setup/` | Hook install, config paths, profiles, auto-detect |
 | `launch/` | pre_start, apply_hook, hook_main, nft apply |
-| `blocking/` | Default-deny, IPv6 drop, RFC1918, ICMP probe |
+| `blocking/` | Default-deny, IPv6 drop, private-range reject, ICMP probe |
 | `allow_deny/` | shield_allow/deny, CLI allow/deny, nft elements |
 | `dns/` | resolve, caching, force-refresh, profile→DNS pipeline |
 | `bypass/` | shield down/up, state detection, bypass traffic, lifecycle E2E |

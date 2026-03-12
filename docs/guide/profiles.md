@@ -35,9 +35,10 @@ cdn.example.com
 10.0.0.5/32
 ```
 
-!!! note "RFC1918 addresses in profiles"
-    Private network addresses like `10.0.0.5/32` are valid in profiles.
-    Allowlisting them (or link-local addresses) generates a notice in the audit log.
+!!! note "Private-range addresses in profiles"
+    Private network addresses like `10.0.0.5/32` (RFC 1918) or ULA addresses
+    (RFC 4193) are valid in profiles. Allowlisting them generates a notice
+    in the audit log.
 
 ## Custom profiles
 

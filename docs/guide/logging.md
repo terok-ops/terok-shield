@@ -25,7 +25,7 @@ Each line is a JSON object:
 | `denied` | Domain/IP removed from allow set at runtime |
 | `shield_down` | Container switched to bypass mode |
 | `shield_up` | Container restored to deny-all mode |
-| `note` | Advisory event (e.g. RFC1918, IPv6 ULA, or link-local address allowlisted) |
+| `note` | Advisory event (e.g. private-range address allowlisted — RFC 1918/RFC 4193) |
 | `error` | Something failed |
 
 ### Viewing logs
@@ -57,7 +57,7 @@ prefixes:
 |--------|---------|
 | `TEROK_SHIELD_DENIED:` | Packet dropped by deny-all rule |
 | `TEROK_SHIELD_ALLOWED:` | Packet accepted by allow set (rate-limited: 10/sec) |
-| `TEROK_SHIELD_PRIVATE:` | Packet rejected by private-range rule (RFC1918 / IPv6 ULA / link-local) |
+| `TEROK_SHIELD_PRIVATE:` | Packet rejected by private-range rule (RFC 1918 / RFC 4193) |
 
 View with:
 

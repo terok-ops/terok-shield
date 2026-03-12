@@ -75,7 +75,7 @@ def _try_validate(ip: str) -> bool:
 
 
 def _private_range_rules(prefix: str = "TEROK_SHIELD_PRIVATE") -> str:
-    """Generate private-range reject rules (RFC1918 + IPv6 ULA/link-local).
+    """Generate private-range reject rules (RFC 1918 + RFC 4193/4291).
 
     Auto-detects address family for the ``daddr`` selector and uses
     cross-family ``icmpx`` reject for all ranges.
@@ -337,7 +337,7 @@ def add_elements_dual(ips: list[str]) -> str:
 
 
 def _verify_private_blocks(nft_output: str) -> list[str]:
-    """Check private-range reject rules (RFC1918 + IPv6) are present.
+    """Check private-range reject rules (RFC 1918 + RFC 4193/4291) are present.
 
     Uses a regex to match reject rule context (``ip[6] daddr <net> ... reject``)
     rather than bare CIDR presence, so set elements don't produce false passes.
@@ -360,7 +360,7 @@ def verify_ruleset(nft_output: str) -> list[str]:
     - Both output and input chains exist
     - Reject type is present
     - Deny log prefix is present
-    - All private ranges are present (RFC1918 + IPv6 ULA/link-local)
+    - All private ranges are present (RFC 1918 + RFC 4193/4291)
     - Dual-stack allow sets are declared
     """
     errors: list[str] = []
