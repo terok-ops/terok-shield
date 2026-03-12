@@ -27,6 +27,7 @@ from terok_shield.mode_hook import HookMode
 from terok_shield.nft import RulesetBuilder
 from terok_shield.profiles import ProfileLoader
 
+from ..testfs import FAKE_RESOLVED_DIR
 from ..testnet import TEST_IP1, TEST_IP2
 
 
@@ -57,7 +58,7 @@ class TestConstructorContracts(unittest.TestCase):
     def test_dns_resolver_rejects_resolved_dir(self) -> None:
         """DnsResolver does not accept resolved_dir kwarg."""
         with self.assertRaises(TypeError):
-            DnsResolver(resolved_dir=Path("/tmp"), runner=mock.MagicMock())  # type: ignore[call-arg]
+            DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=mock.MagicMock())  # type: ignore[call-arg]
 
     def test_audit_logger_accepts_audit_path(self) -> None:
         """AuditLogger takes audit_path=, not log_dir."""
