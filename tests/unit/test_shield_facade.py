@@ -274,7 +274,7 @@ class TestShieldResolve(unittest.TestCase):
         dns.resolve_and_cache.return_value = [TEST_IP1]
         shield = _make_shield(profiles=profiles, dns=dns)
 
-        result = shield.resolve("test-ctr", ["dev-standard"])
+        result = shield.resolve(["dev-standard"])
         profiles.compose_profiles.assert_called_once_with(["dev-standard"])
         dns.resolve_and_cache.assert_called_once()
         self.assertEqual(result, [TEST_IP1])
@@ -285,7 +285,7 @@ class TestShieldResolve(unittest.TestCase):
         profiles.compose_profiles.return_value = []
         shield = _make_shield(profiles=profiles)
 
-        result = shield.resolve("test-ctr", ["empty"])
+        result = shield.resolve(["empty"])
         self.assertEqual(result, [])
 
     def test_force_sets_max_age_zero(self) -> None:
@@ -296,7 +296,7 @@ class TestShieldResolve(unittest.TestCase):
         dns.resolve_and_cache.return_value = [TEST_IP1]
         shield = _make_shield(profiles=profiles, dns=dns)
 
-        shield.resolve("test-ctr", ["dev-standard"], force=True)
+        shield.resolve(["dev-standard"], force=True)
         call_kwargs = dns.resolve_and_cache.call_args[1]
         self.assertEqual(call_kwargs["max_age"], 0)
 
@@ -308,7 +308,7 @@ class TestShieldResolve(unittest.TestCase):
             profiles.compose_profiles.return_value = []
             shield = _make_shield(config=config, profiles=profiles)
 
-            shield.resolve("test-ctr")
+            shield.resolve()
             profiles.compose_profiles.assert_called_once_with(["base"])
 
 

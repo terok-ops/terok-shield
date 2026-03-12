@@ -28,7 +28,7 @@ from terok_shield.nft import RulesetBuilder
 from terok_shield.profiles import ProfileLoader
 
 from ..testfs import FAKE_RESOLVED_DIR
-from ..testnet import TEST_IP1, TEST_IP2
+from ..testnet import TEST_DOMAIN, TEST_IP1, TEST_IP2
 
 
 class TestConstructorContracts(unittest.TestCase):
@@ -89,7 +89,7 @@ class TestDnsResolverCacheContract(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             cache_path = Path(tmp) / "profile.allowed"
-            ips = resolver.resolve_and_cache(["example.com"], cache_path)
+            ips = resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
             self.assertIn(TEST_IP1, ips)
             self.assertTrue(cache_path.is_file())
             self.assertIn(TEST_IP1, cache_path.read_text())
@@ -102,7 +102,7 @@ class TestDnsResolverCacheContract(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             cache_path = Path(tmp) / "profile.allowed"
-            resolver.resolve_and_cache(["example.com"], cache_path)
+            resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
             runner.dig_all.reset_mock()
 
             ips2 = resolver.resolve_and_cache(["example.com"], cache_path, max_age=3600)
@@ -259,17 +259,20 @@ class TestShieldAssembly(unittest.TestCase):
             self.assertEqual(shield.audit._audit_path, expected)
 
     def test_shield_resolve_uses_profile_allowed_path(self) -> None:
-        """Shield.resolve() caches to state_dir/profile.allowed."""
+        """Shield.resolve() forwards entries and caches to state_dir/profile.allowed."""
         with tempfile.TemporaryDirectory() as tmp:
             sd = Path(tmp)
             dns = mock.MagicMock()
             dns.resolve_and_cache.return_value = [TEST_IP1]
             profiles = mock.MagicMock()
-            profiles.compose_profiles.return_value = ["example.com"]
+            profiles.compose_profiles.return_value = [TEST_DOMAIN]
 
             shield = Shield(ShieldConfig(state_dir=sd), dns=dns, profiles=profiles)
-            shield.resolve("test-ctr", ["dev-standard"])
+            shield.resolve(["dev-standard"])
 
+            dns.resolve_and_cache.assert_called_once()
             call_args = dns.resolve_and_cache.call_args
-            cache_path = call_args[0][1]
-            self.assertEqual(cache_path, state.profile_allowed_path(sd))
+            # First positional arg: composed entries
+            self.assertEqual(call_args[0][0], [TEST_DOMAIN])
+            # Second positional arg: cache path
+            self.assertEqual(call_args[0][1], state.profile_allowed_path(sd))

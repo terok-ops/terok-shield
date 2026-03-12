@@ -157,7 +157,6 @@ class Shield:
 
     def resolve(
         self,
-        container: str,
         profiles: list[str] | None = None,
         *,
         force: bool = False,

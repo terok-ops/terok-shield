@@ -170,7 +170,7 @@ class TestMainDispatch(unittest.TestCase):
         """CLI resolve calls shield.resolve()."""
         mock_cls.return_value.resolve.return_value = [TEST_IP1]
         main(["resolve", "test"])
-        mock_cls.return_value.resolve.assert_called_once_with("test", force=False)
+        mock_cls.return_value.resolve.assert_called_once_with(force=False)
 
     @mock.patch("terok_shield.cli.Shield")
     @mock.patch("terok_shield.cli._build_config")
@@ -178,7 +178,7 @@ class TestMainDispatch(unittest.TestCase):
         """CLI resolve --force passes force=True."""
         mock_cls.return_value.resolve.return_value = []
         main(["resolve", "test", "--force"])
-        mock_cls.return_value.resolve.assert_called_once_with("test", force=True)
+        mock_cls.return_value.resolve.assert_called_once_with(force=True)
 
     @mock.patch("terok_shield.cli.Shield")
     @mock.patch("terok_shield.cli._build_config")

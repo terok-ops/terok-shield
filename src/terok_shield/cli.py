@@ -296,7 +296,7 @@ def _cmd_status(shield: Shield) -> None:
 
 def _cmd_resolve(shield: Shield, container: str, force: bool) -> None:
     """Resolve DNS profiles and cache results."""
-    ips = shield.resolve(container, force=force)
+    ips = shield.resolve(force=force)
     label = " (forced)" if force else ""
     print(f"Resolved {len(ips)} IPs for {container}{label}")
     for ip in ips:

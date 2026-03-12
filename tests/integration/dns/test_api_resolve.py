@@ -21,7 +21,7 @@ class TestShieldResolve:
     def test_resolve_returns_ips(self, shield_env: Path) -> None:
         """``Shield.resolve()`` returns a list of IPs."""
         sd = shield_env / "containers" / "resolve-test-ctr"
-        ips = Shield(ShieldConfig(state_dir=sd)).resolve("resolve-test-ctr")
+        ips = Shield(ShieldConfig(state_dir=sd)).resolve()
         assert len(ips) > 0, "Resolve should return at least one IP"
         for ip in ips:
             assert isinstance(ip, str)
@@ -29,7 +29,7 @@ class TestShieldResolve:
     def test_resolve_creates_cache(self, shield_env: Path) -> None:
         """A profile.allowed file exists after ``Shield.resolve()``."""
         sd = shield_env / "containers" / "cache-test-ctr"
-        Shield(ShieldConfig(state_dir=sd)).resolve("cache-test-ctr")
+        Shield(ShieldConfig(state_dir=sd)).resolve()
 
         allowed = state.profile_allowed_path(sd)
         assert allowed.is_file(), "profile.allowed should be created"
@@ -41,7 +41,7 @@ class TestShieldResolve:
         cache_file = state.profile_allowed_path(sd)
         cache_file.write_text(f"{TEST_IP4}\n")
 
-        ips = Shield(ShieldConfig(state_dir=sd)).resolve("force-test-ctr", force=True)
+        ips = Shield(ShieldConfig(state_dir=sd)).resolve(force=True)
 
         assert ips, "Force-resolve should return at least one IP"
         assert TEST_IP4 not in ips, "Sentinel IP should be replaced by real resolution"
