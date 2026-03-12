@@ -287,9 +287,7 @@ class TestAutoDetectMode(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _auto_detect_mode()
 
-    @unittest.mock.patch(
-        "shutil.which", side_effect=lambda n: NFT_BINARY if n == "nft" else None
-    )
+    @unittest.mock.patch("shutil.which", side_effect=lambda n: NFT_BINARY if n == "nft" else None)
     @unittest.mock.patch("subprocess.run", side_effect=FileNotFoundError)
     def test_nft_only_returns_hook(
         self, _run: unittest.mock.Mock, _which: unittest.mock.Mock

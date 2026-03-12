@@ -82,8 +82,11 @@ class TestHookModeSetup(unittest.TestCase):
                     hook_entrypoint=config.paths.hook_entrypoint,
                     hooks_dir=config.paths.hooks_dir,
                 )
-            # ensure_dirs was called (directories exist)
+            # ensure_dirs was called — check dirs only it creates (not install_hooks)
             self.assertTrue(paths.state_root.is_dir())
+            self.assertTrue(paths.logs_dir.is_dir())
+            self.assertTrue(paths.resolved_dir.is_dir())
+            self.assertTrue(paths.profiles_dir.is_dir())
 
 
 class TestHookModePreStart(unittest.TestCase):

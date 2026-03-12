@@ -301,6 +301,7 @@ class HookMode:
         if not output.strip():
             return ShieldState.INACTIVE
 
+        # verify_* returns a list of errors; empty list = ruleset is valid
         if not self._ruleset.verify_bypass(output, allow_all=False):
             return ShieldState.DOWN
         if not self._ruleset.verify_bypass(output, allow_all=True):
