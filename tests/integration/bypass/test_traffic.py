@@ -13,7 +13,6 @@ Traffic tests are split by protocol/port so that future rule changes
 
 import pytest
 
-from terok_shield import Shield, ShieldConfig
 from terok_shield.nft_constants import BYPASS_LOG_PREFIX, IPV6_PRIVATE, RFC1918
 from tests.testnet import (
     ALLOWED_TARGET_HTTP,
@@ -24,11 +23,13 @@ from tests.testnet import (
 )
 
 from ..conftest import nft_missing, podman_missing
-from ..helpers import assert_blocked, assert_connectable, assert_not_connectable, assert_reachable
-
-
-def _shield() -> Shield:
-    return Shield(ShieldConfig())
+from ..helpers import (
+    assert_blocked,
+    assert_connectable,
+    assert_not_connectable,
+    assert_reachable,
+    disposable_shield as _shield,
+)
 
 
 @pytest.mark.needs_podman

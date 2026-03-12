@@ -151,24 +151,24 @@ class TestBypassModeSwitch:
 class TestBypassWithAllowDeny:
     """Verify allow/deny interactions during bypass."""
 
-    def test_allow_during_bypass_does_not_persist(self, shielded_container: str) -> None:
-        """IPs added via allow during bypass are lost on shield.up().
+    def test_allow_during_bypass_persists_via_live_allowed(self, shielded_container: str) -> None:
+        """IPs added via allow during bypass survive shield.up() via live.allowed.
 
-        shield.up() atomically replaces the ruleset, so any runtime
-        allow() calls during bypass do not survive the transition.
-        Only cached IPs from the allowlist files are re-added.
+        allow_ip() persists IPs to live.allowed, and shield.up() reads
+        them back via state.read_allowed_ips(). The IP survives the
+        transition even though the nft ruleset is atomically replaced.
         """
         shield = _shield()
         shield.down(shielded_container)
 
-        # Add IP to allow set during bypass
+        # Add IP to allow set during bypass — persists to live.allowed
         shield.allow(shielded_container, BLOCKED_TARGET_IP)
 
-        # Restore shield — the runtime add is lost
+        # Restore shield — the IP is re-added from live.allowed
         shield.up(shielded_container)
 
-        # Verify the IP is not allowed
-        assert_blocked(shielded_container, BLOCKED_TARGET_HTTP)
+        # Verify the IP is still allowed
+        assert_connectable(shielded_container, BLOCKED_TARGET_IP, BLOCKED_TARGET_DNS_PORT)
 
     def test_deny_during_bypass_has_no_traffic_effect(self, shielded_container: str) -> None:
         """Denying during bypass doesn't block traffic (policy is accept).
@@ -379,13 +379,14 @@ class TestBypassFullE2E:
         assert "terok_shield" in rules
 
     def test_allow_before_and_after_bypass(self, shielded_container: str) -> None:
-        """IPs allowed before bypass, lost during bypass, can be re-allowed after.
+        """IPs allowed before bypass survive the bypass cycle via live.allowed.
 
-        Demonstrates that the state is clean after a bypass cycle:
-        the user can re-allow IPs just like on a fresh container.
+        allow_ip() persists IPs to live.allowed, and shield_up() reads
+        them back via state.read_allowed_ips(), so they survive the
+        down/up cycle without needing to re-allow.
         """
         shield = _shield()
-        # Allow before bypass
+        # Allow before bypass — persists to live.allowed
         for ip in ALLOWED_TARGET_IPS:
             shield.allow(shielded_container, ip)
         assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
@@ -394,10 +395,5 @@ class TestBypassFullE2E:
         shield.down(shielded_container)
         shield.up(shielded_container)
 
-        # Without cache, the allowed IPs are gone (ruleset was replaced)
-        assert_blocked(shielded_container, ALLOWED_TARGET_HTTP)
-
-        # But we can re-allow them
-        for ip in ALLOWED_TARGET_IPS:
-            shield.allow(shielded_container, ip)
+        # IPs survive because live.allowed is read back by shield_up()
         assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
