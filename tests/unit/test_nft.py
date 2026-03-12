@@ -17,8 +17,12 @@ from terok_shield.nft import (
 from terok_shield.nft_constants import BYPASS_LOG_PREFIX, IPV6_PRIVATE, PRIVATE_RANGES, RFC1918
 
 from ..testnet import (
+    IPV4_CIDR_HOST_BITS,
+    IPV4_CIDR_HOST_BITS_CANONICAL,
     IPV6_CLOUDFLARE,
     IPV6_NET1,
+    IPV6_VERBOSE,
+    IPV6_VERBOSE_CANONICAL,
     LINK_LOCAL_DNS,
     TEST_IP1,
     TEST_IP2,
@@ -66,11 +70,11 @@ class TestSafeIp(unittest.TestCase):
 
     def test_normalizes_ipv6(self) -> None:
         """Normalize verbose IPv6 to canonical compressed form."""
-        self.assertEqual(safe_ip("2001:0db8:0000:0000:0000:0000:0000:0001"), "2001:db8::1")
+        self.assertEqual(safe_ip(IPV6_VERBOSE), IPV6_VERBOSE_CANONICAL)
 
     def test_normalizes_ipv4_cidr_host_bits(self) -> None:
         """Normalize CIDR with host bits to network address."""
-        self.assertEqual(safe_ip("192.168.1.5/24"), "192.168.1.0/24")
+        self.assertEqual(safe_ip(IPV4_CIDR_HOST_BITS), IPV4_CIDR_HOST_BITS_CANONICAL)
 
 
 class TestHookRuleset(unittest.TestCase):

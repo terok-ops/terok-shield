@@ -70,7 +70,8 @@ terok-shield allow my-container 203.0.113.10
 
 If `target` is a domain name, it is resolved to IPs automatically.
 Changes take effect immediately. Allowed IPs are persisted to `live.allowed`
-and survive `down`/`up` bypass cycles.
+and survive `down`/`up` bypass cycles. If the IP was previously denied
+(present in `deny.list`), the deny is cleared automatically.
 
 ## deny
 
@@ -90,7 +91,10 @@ terok-shield deny my-container example.com
 # Denied example.com (<resolved-ip>) for my-container
 ```
 
-The IP is also removed from `live.allowed`.
+The IP is removed from the nft allow set (best-effort) and from `live.allowed`.
+If the IP originated from a loaded preset (`profile.allowed`), it is also
+written to `deny.list` so the deny persists across `up`/`down` cycles and
+container restarts.
 
 ## down
 
@@ -117,8 +121,8 @@ Restore normal deny-all mode for a container.
 terok-shield up <container>
 ```
 
-Re-applies the deny-all ruleset and restores IPs from both `profile.allowed`
-and `live.allowed`.
+Re-applies the deny-all ruleset and restores effective IPs:
+`(profile.allowed ∪ live.allowed) − deny.list`.
 
 ## preview
 
