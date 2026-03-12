@@ -91,10 +91,10 @@ terok-shield deny my-container example.com
 # Denied example.com (<resolved-ip>) for my-container
 ```
 
-The IP is removed from the nft allow set (best-effort) and from `live.allowed`.
-If the IP originated from a loaded preset (`profile.allowed`), it is also
-written to `deny.list` so the deny persists across `up`/`down` cycles and
-container restarts.
+The IP is removed from the nft allow set (if present; errors are logged but
+do not prevent the deny from being persisted) and from `live.allowed`.
+If the IP is present in `profile.allowed`, it is also written to `deny.list`
+so the deny persists across `up`/`down` cycles and container restarts.
 
 ## down
 

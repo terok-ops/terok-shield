@@ -48,8 +48,9 @@ the deny must survive `shield up` and container restarts. The mechanism:
 
 `deny.list` stays minimal — only IPs that truly override a preset are stored.
 Denying a live-only IP just removes it from `live.allowed` (no `deny.list`
-entry needed). `nft.py` is untouched — it receives a flat IP list with denied
-entries already subtracted.
+entry needed). Deny-list reconciliation happens in `state.py` before ruleset
+generation; `nft.py` receives a flat IP list with denied entries already
+subtracted.
 
 ### IP normalization
 
