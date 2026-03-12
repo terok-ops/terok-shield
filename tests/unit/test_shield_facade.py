@@ -344,6 +344,10 @@ class TestShieldDelegationMethods(unittest.TestCase):
 # ── Helper ──────────────────────────────────────────────
 
 
+_DISPOSABLE_DIRS: list[tempfile.TemporaryDirectory] = []
+"""Managed temp dirs for mock-only tests (cleaned up at process exit)."""
+
+
 def _make_shield(
     config: ShieldConfig | None = None,
     *,
@@ -355,7 +359,9 @@ def _make_shield(
 ) -> Shield:
     """Create a Shield with mock collaborators.  Bypasses _create_mode."""
     if config is None:
-        config = ShieldConfig(state_dir=Path(tempfile.mkdtemp()))
+        td = tempfile.TemporaryDirectory()
+        _DISPOSABLE_DIRS.append(td)
+        config = ShieldConfig(state_dir=Path(td.name))
     s = Shield.__new__(Shield)
     s.config = config
     s.runner = mock.MagicMock()

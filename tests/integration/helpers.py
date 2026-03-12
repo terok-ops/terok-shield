@@ -201,5 +201,6 @@ def assert_ruleset_applied(container: str) -> None:
     """
     from terok_shield import Shield, ShieldConfig
 
-    rules = Shield(ShieldConfig(state_dir=Path(tempfile.mkdtemp()))).rules(container)
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = Shield(ShieldConfig(state_dir=Path(tmp))).rules(container)
     assert "terok_shield" in rules, f"Expected terok_shield rules applied, got: {rules[:200]}"

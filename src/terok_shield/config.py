@@ -18,6 +18,7 @@ ANNOTATION_NAME_KEY = "terok.shield.name"
 ANNOTATION_STATE_DIR_KEY = "terok.shield.state_dir"
 ANNOTATION_LOOPBACK_PORTS_KEY = "terok.shield.loopback_ports"
 ANNOTATION_VERSION_KEY = "terok.shield.version"
+ANNOTATION_AUDIT_ENABLED_KEY = "terok.shield.audit_enabled"
 
 
 class ShieldMode(enum.Enum):

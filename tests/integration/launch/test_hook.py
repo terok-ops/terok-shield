@@ -197,7 +197,8 @@ class TestHookMainE2E:
     ) -> None:
         """hook_main returns 0 on success and applies the firewall."""
         with tempfile.TemporaryDirectory() as tmp:
-            monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
+            # Set env to a *different* path to prove hook_main uses annotation
+            monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", "/nonexistent/sentinel")
 
             oci_state = _oci_state_with_annotations(container, int(container_pid), tmp)
             rc = hook_main(oci_state)
@@ -209,7 +210,7 @@ class TestHookMainE2E:
     def test_hook_main_bad_pid(self, container: str, monkeypatch: pytest.MonkeyPatch) -> None:
         """hook_main returns 1 for unreachable PID."""
         with tempfile.TemporaryDirectory() as tmp:
-            monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
+            monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", "/nonexistent/sentinel")
             oci_state = _oci_state_with_annotations(container, 999999, tmp)
             rc = hook_main(oci_state)
             assert rc == 1
@@ -219,7 +220,8 @@ class TestHookMainE2E:
     ) -> None:
         """Full lifecycle: OCI state → hook_main → traffic filtered."""
         with tempfile.TemporaryDirectory() as tmp:
-            monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
+            # Set env to a *different* path to prove hook_main uses annotation
+            monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", "/nonexistent/sentinel")
 
             # Pre-resolve: allow Cloudflare anycast pair only
             state.profile_allowed_path(Path(tmp)).write_text("\n".join(ALLOWED_TARGET_IPS) + "\n")

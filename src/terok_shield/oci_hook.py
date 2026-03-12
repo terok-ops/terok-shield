@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from . import state
 from .audit import AuditLogger
 from .config import (
+    ANNOTATION_AUDIT_ENABLED_KEY,
     ANNOTATION_LOOPBACK_PORTS_KEY,
     ANNOTATION_STATE_DIR_KEY,
     ANNOTATION_VERSION_KEY,
@@ -350,11 +351,15 @@ def hook_main(stdin_data: str | None = None, stage: str = "createRuntime") -> in
             )
 
         loopback_ports = _parse_loopback_ports(annotations.get(ANNOTATION_LOOPBACK_PORTS_KEY, ""))
+        audit_enabled = annotations.get(ANNOTATION_AUDIT_ENABLED_KEY, "true").lower() in (
+            "true",
+            "1",
+        )
 
         runner = SubprocessRunner()
         audit = AuditLogger(
             audit_path=state.audit_path(sd),
-            enabled=True,
+            enabled=audit_enabled,
         )
         ruleset = RulesetBuilder(loopback_ports=loopback_ports)
         executor = HookExecutor(

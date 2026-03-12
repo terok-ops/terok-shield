@@ -18,6 +18,8 @@ from terok_shield.state import (
     profile_allowed_path,
 )
 
+from ..testfs import FAKE_STATE_DIR
+
 
 class TestBundleVersion(unittest.TestCase):
     """Test BUNDLE_VERSION constant."""
@@ -33,7 +35,7 @@ class TestPathDerivation(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up a base state directory for tests."""
-        self._sd = Path("/tmp/terok-test-state")
+        self._sd = FAKE_STATE_DIR
 
     def test_hooks_dir(self) -> None:
         """hooks_dir returns state_dir / hooks."""

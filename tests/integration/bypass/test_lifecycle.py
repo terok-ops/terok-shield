@@ -27,10 +27,15 @@ from tests.testnet import (
 from ..conftest import CTR_PREFIX, IMAGE, nft_missing, podman_missing
 from ..helpers import assert_blocked, assert_connectable, assert_reachable, start_shielded_container
 
+_DISPOSABLE_DIRS: list[tempfile.TemporaryDirectory] = []
+"""Managed temp dirs for nft-only tests (cleaned up at process exit)."""
+
 
 def _shield() -> Shield:
     """Create a Shield with a disposable state_dir (for nft-only ops)."""
-    return Shield(ShieldConfig(state_dir=Path(tempfile.mkdtemp())))
+    td = tempfile.TemporaryDirectory()
+    _DISPOSABLE_DIRS.append(td)
+    return Shield(ShieldConfig(state_dir=Path(td.name)))
 
 
 @pytest.mark.needs_podman

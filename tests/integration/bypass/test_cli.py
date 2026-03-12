@@ -16,10 +16,15 @@ from tests.testnet import BLOCKED_TARGET_DNS_PORT, BLOCKED_TARGET_HTTP, BLOCKED_
 from ..conftest import nft_missing, podman_missing
 from ..helpers import assert_blocked, assert_connectable
 
+_DISPOSABLE_DIRS: list[tempfile.TemporaryDirectory] = []
+"""Managed temp dirs for nft-only tests (cleaned up at process exit)."""
+
 
 def _shield() -> Shield:
     """Create a Shield with a disposable state_dir (for nft-only ops)."""
-    return Shield(ShieldConfig(state_dir=Path(tempfile.mkdtemp())))
+    td = tempfile.TemporaryDirectory()
+    _DISPOSABLE_DIRS.append(td)
+    return Shield(ShieldConfig(state_dir=Path(td.name)))
 
 
 @pytest.mark.needs_podman

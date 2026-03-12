@@ -117,21 +117,23 @@ class TestAllowDenyAPI:
 
     def test_shield_allow_ip(self, shielded_container: str) -> None:
         """``Shield.allow()`` with an IP makes it reachable."""
-        shield = Shield(ShieldConfig(state_dir=Path(tempfile.mkdtemp())))
-        allowed = shield.allow(shielded_container, ALLOWED_TARGET_IPS[0])
-        assert ALLOWED_TARGET_IPS[0] in allowed
+        with tempfile.TemporaryDirectory() as tmp:
+            shield = Shield(ShieldConfig(state_dir=Path(tmp)))
+            allowed = shield.allow(shielded_container, ALLOWED_TARGET_IPS[0])
+            assert ALLOWED_TARGET_IPS[0] in allowed
 
-        # Allow both Cloudflare IPs (anycast pair)
-        shield.allow(shielded_container, ALLOWED_TARGET_IPS[1])
-        assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
+            # Allow both Cloudflare IPs (anycast pair)
+            shield.allow(shielded_container, ALLOWED_TARGET_IPS[1])
+            assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
 
     def test_shield_allow_deny_cycle(self, shielded_container: str) -> None:
         """``Shield.allow()`` then ``Shield.deny()`` blocks IP again."""
-        shield = Shield(ShieldConfig(state_dir=Path(tempfile.mkdtemp())))
-        for ip in ALLOWED_TARGET_IPS:
-            shield.allow(shielded_container, ip)
-        assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
+        with tempfile.TemporaryDirectory() as tmp:
+            shield = Shield(ShieldConfig(state_dir=Path(tmp)))
+            for ip in ALLOWED_TARGET_IPS:
+                shield.allow(shielded_container, ip)
+            assert_reachable(shielded_container, ALLOWED_TARGET_HTTP)
 
-        for ip in ALLOWED_TARGET_IPS:
-            shield.deny(shielded_container, ip)
-        assert_blocked(shielded_container, ALLOWED_TARGET_HTTP)
+            for ip in ALLOWED_TARGET_IPS:
+                shield.deny(shielded_container, ip)
+            assert_blocked(shielded_container, ALLOWED_TARGET_HTTP)

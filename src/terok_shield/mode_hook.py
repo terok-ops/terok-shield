@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from . import state
 from .config import (
+    ANNOTATION_AUDIT_ENABLED_KEY,
     ANNOTATION_KEY,
     ANNOTATION_LOOPBACK_PORTS_KEY,
     ANNOTATION_NAME_KEY,
@@ -187,6 +188,8 @@ class HookMode:
             f"{ANNOTATION_LOOPBACK_PORTS_KEY}={ports_str}",
             "--annotation",
             f"{ANNOTATION_VERSION_KEY}={state.BUNDLE_VERSION}",
+            "--annotation",
+            f"{ANNOTATION_AUDIT_ENABLED_KEY}={str(self._config.audit_enabled).lower()}",
             "--hooks-dir",
             str(state.hooks_dir(sd)),
             "--cap-drop",
@@ -226,11 +229,13 @@ class HookMode:
             self._set_for_ip(ip),
             f"{{ {ip} }}",
         )
-        # Persist to live.allowed
+        # Persist to live.allowed (skip if already present)
         live_path = state.live_allowed_path(self._config.state_dir)
         live_path.parent.mkdir(parents=True, exist_ok=True)
-        with live_path.open("a") as f:
-            f.write(f"{ip}\n")
+        existing = set(live_path.read_text().splitlines()) if live_path.is_file() else set()
+        if ip not in existing:
+            with live_path.open("a") as f:
+                f.write(f"{ip}\n")
 
     def deny_ip(self, container: str, ip: str) -> None:
         """Live-deny an IP for a running container via nsenter."""

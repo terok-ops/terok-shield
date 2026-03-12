@@ -17,6 +17,9 @@ from terok_shield.run import ExecError
 
 from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1
 
+_DISPOSABLE_DIRS: list[tempfile.TemporaryDirectory] = []
+"""Managed temp dirs for mock-only tests (cleaned up at process exit)."""
+
 
 def _make_hook_mode(
     tmp_path: Path | None = None,
@@ -31,7 +34,9 @@ def _make_hook_mode(
     """Create a HookMode with mock collaborators."""
     if config is None:
         if tmp_path is None:
-            tmp_path = Path(tempfile.mkdtemp())
+            td = tempfile.TemporaryDirectory()
+            _DISPOSABLE_DIRS.append(td)
+            tmp_path = Path(td.name)
         config = ShieldConfig(state_dir=tmp_path)
     return HookMode(
         config=config,
@@ -128,6 +133,24 @@ class TestHookModePreStart(unittest.TestCase):
             else:
                 self.fail("state_dir annotation not found in args")
 
+    def test_annotations_include_audit_enabled(self) -> None:
+        """pre_start includes audit_enabled annotation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = ShieldConfig(state_dir=Path(tmp), audit_enabled=False)
+            profiles_mock = mock.MagicMock()
+            profiles_mock.compose_profiles.return_value = []
+            dns = mock.MagicMock()
+            mode = _make_hook_mode(config=config, profiles=profiles_mock, dns=dns)
+            with mock.patch("os.geteuid", return_value=0):
+                args = mode.pre_start("test", ["dev-standard"])
+            # Find audit_enabled annotation
+            for i, arg in enumerate(args):
+                if arg == "--annotation" and "terok.shield.audit_enabled=" in args[i + 1]:
+                    self.assertIn("false", args[i + 1])
+                    break
+            else:
+                self.fail("audit_enabled annotation not found in args")
+
 
 class TestHookModeAllowDeny(unittest.TestCase):
     """Test HookMode.allow_ip() and deny_ip()."""
@@ -158,6 +181,20 @@ class TestHookModeAllowDeny(unittest.TestCase):
             live_path = state.live_allowed_path(Path(tmp))
             self.assertTrue(live_path.is_file())
             self.assertIn(TEST_IP1, live_path.read_text())
+
+    def test_allow_deduplicates_live_allowed(self) -> None:
+        """allow_ip does not append duplicate entries to live.allowed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = mock.MagicMock()
+            ruleset = mock.MagicMock()
+            ruleset.safe_ip.return_value = TEST_IP1
+            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
+
+            mode.allow_ip("test-ctr", TEST_IP1)
+            mode.allow_ip("test-ctr", TEST_IP1)
+            live_path = state.live_allowed_path(Path(tmp))
+            lines = [line for line in live_path.read_text().splitlines() if line.strip()]
+            self.assertEqual(lines.count(TEST_IP1), 1)
 
     def test_allow_ipv6(self) -> None:
         """allow_ip adds element to allow_v6 set for IPv6."""

@@ -24,6 +24,7 @@ from terok_shield.config import ShieldMode
 from ..testfs import (
     FAKE_CONFIG_DIR,
     FAKE_STATE_DIR,
+    FAKE_STATE_DIR_STR,
     FAKE_XDG_CONFIG_HOME,
     FAKE_XDG_STATE_HOME,
     NFT_BINARY,
@@ -123,8 +124,8 @@ class TestBuildParser(unittest.TestCase):
     def test_state_dir_flag(self) -> None:
         """Parser has --state-dir global flag."""
         parser = _build_parser()
-        ns = parser.parse_args(["--state-dir", "/tmp/test", "status"])
-        self.assertEqual(ns.state_dir, Path("/tmp/test"))
+        ns = parser.parse_args(["--state-dir", FAKE_STATE_DIR_STR, "status"])
+        self.assertEqual(ns.state_dir, FAKE_STATE_DIR)
 
 
 class TestMainNoCommand(unittest.TestCase):
@@ -332,33 +333,34 @@ class TestMainOutputFormatting(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("No rules found", output)
 
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_logs_no_files(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
+    def test_logs_no_files(self) -> None:
         """CLI logs prints 'No audit logs found' when no files."""
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["logs"])
-        finally:
-            sys.stdout = sys.__stdout__
-        output = captured.getvalue()
-        self.assertIn("No audit logs found", output)
+        with tempfile.TemporaryDirectory() as tmp:
+            captured = io.StringIO()
+            sys.stdout = captured
+            try:
+                main(["--state-dir", tmp, "logs"])
+            finally:
+                sys.stdout = sys.__stdout__
+            output = captured.getvalue()
+            self.assertIn("No audit logs found", output)
 
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_logs_with_container(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI logs with --container prints entries as JSON."""
-        mock_cls.return_value.tail_log.return_value = iter([{"action": "setup"}])
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["logs", "--container", "test"])
-        finally:
-            sys.stdout = sys.__stdout__
-        output = captured.getvalue().strip()
-        entry = json.loads(output)
-        self.assertEqual(entry["action"], "setup")
+    def test_logs_with_container(self) -> None:
+        """CLI logs with --container prints entries from audit file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ctr_dir = Path(tmp) / "containers" / "test"
+            ctr_dir.mkdir(parents=True)
+            audit_file = ctr_dir / "audit.jsonl"
+            audit_file.write_text('{"action":"setup","timestamp":"2026-01-01T00:00:00"}\n')
+            captured = io.StringIO()
+            sys.stdout = captured
+            try:
+                main(["--state-dir", tmp, "logs", "--container", "test"])
+            finally:
+                sys.stdout = sys.__stdout__
+            output = captured.getvalue().strip()
+            entry = json.loads(output)
+            self.assertEqual(entry["action"], "setup")
 
 
 class TestMainErrorHandling(unittest.TestCase):

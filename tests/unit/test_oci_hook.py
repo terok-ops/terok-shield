@@ -152,3 +152,18 @@ class TestHookMain(unittest.TestCase):
             ann["terok.shield.version"] = "not-a-number"
             rc = hook_main(_oci_state(annotations=ann))
             self.assertEqual(rc, 1)
+
+    @unittest.mock.patch("terok_shield.oci_hook.HookExecutor")
+    @unittest.mock.patch("terok_shield.oci_hook.AuditLogger")
+    def test_audit_disabled_annotation(
+        self, mock_audit_cls: unittest.mock.Mock, mock_exec: unittest.mock.Mock
+    ) -> None:
+        """audit_enabled=false annotation is honored by hook_main."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ann = _valid_annotations(tmp)
+            ann["terok.shield.audit_enabled"] = "false"
+            rc = hook_main(_oci_state(annotations=ann))
+            self.assertEqual(rc, 0)
+            mock_audit_cls.assert_called_once()
+            _, kwargs = mock_audit_cls.call_args
+            self.assertFalse(kwargs["enabled"])

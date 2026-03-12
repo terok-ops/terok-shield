@@ -78,9 +78,13 @@ def shield_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     Yields:
         Path to the temporary state root directory.
     """
-    with tempfile.TemporaryDirectory() as tmp:
-        monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp)
-        yield Path(tmp)
+    with (
+        tempfile.TemporaryDirectory() as tmp_state,
+        tempfile.TemporaryDirectory() as tmp_config,
+    ):
+        monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", tmp_state)
+        monkeypatch.setenv("TEROK_SHIELD_CONFIG_DIR", tmp_config)
+        yield Path(tmp_state)
 
 
 @pytest.fixture(scope="session")

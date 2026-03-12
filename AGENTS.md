@@ -161,7 +161,7 @@ The library is a pure function of its inputs. Given a `ShieldConfig` with `state
 
 Each container gets an isolated `state_dir` with this layout:
 
-```
+```text
 {state_dir}/
 ├── hooks/
 │   ├── terok-shield-createRuntime.json

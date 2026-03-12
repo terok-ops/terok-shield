@@ -17,6 +17,7 @@ FAKE_LOGS_DIR = _BASE / "logs"
 FAKE_PROFILES_DIR = _BASE / "profiles"
 FAKE_RESOLVED_DIR = _BASE / "resolved"
 FAKE_STATE_DIR = _BASE / "state"
+FAKE_STATE_DIR_STR = str(FAKE_STATE_DIR)
 FAKE_CONFIG_DIR = _BASE / "config"
 FAKE_XDG_STATE_HOME = _BASE / "xdg-state"
 FAKE_XDG_CONFIG_HOME = _BASE / "xdg-config"

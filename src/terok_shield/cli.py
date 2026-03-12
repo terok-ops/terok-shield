@@ -250,7 +250,16 @@ def _dispatch(args: argparse.Namespace) -> None:
     cmd = args.command
     state_dir_override = getattr(args, "state_dir", None)
 
-    # Commands that need a per-container config
+    # logs doesn't need a Shield — avoid _auto_detect_mode() / nft check
+    if cmd == "logs":
+        _cmd_logs(
+            state_dir_override=state_dir_override,
+            container=getattr(args, "container", None),
+            n=args.n,
+        )
+        return
+
+    # All other commands need a per-container config + Shield
     container = getattr(args, "container", None)
     config = _build_config(container, state_dir_override=state_dir_override)
     shield = Shield(config)
@@ -271,8 +280,6 @@ def _dispatch(args: argparse.Namespace) -> None:
         _cmd_preview(shield, down=args.down, allow_all=args.allow_all)
     elif cmd == "rules":
         _cmd_rules(shield, args.container)
-    elif cmd == "logs":
-        _cmd_logs(shield, state_dir_override=state_dir_override, container=args.container, n=args.n)
 
 
 def _cmd_status(shield: Shield) -> None:
@@ -349,38 +356,44 @@ def _cmd_rules(shield: Shield, container: str) -> None:
 
 
 def _cmd_logs(
-    shield: Shield,
     *,
     state_dir_override: Path | None,
     container: str | None,
     n: int,
 ) -> None:
-    """Show audit log entries."""
+    """Show audit log entries.
+
+    When ``container`` is given, tails that container's audit log.
+    Otherwise, collects entries from all containers, sorts by timestamp,
+    and prints the most recent ``n`` globally.
+    """
+    from .audit import AuditLogger
+
     if container:
-        # Build a per-container shield for the specific container
-        config = _build_config(container, state_dir_override=state_dir_override)
-        ctr_shield = Shield(config)
-        for entry in ctr_shield.tail_log(n):
+        state_root = state_dir_override or _resolve_state_root()
+        audit_file = state_root / "containers" / container / "audit.jsonl"
+        logger = AuditLogger(audit_path=audit_file)
+        for entry in logger.tail_log(n):
             print(json.dumps(entry))
     else:
-        # Scan all containers
+        # Scan all containers, merge entries, sort by timestamp
         state_root = state_dir_override or _resolve_state_root()
         containers_dir = state_root / "containers"
         if not containers_dir.is_dir():
             print("No audit logs found.")
             return
-        found = False
+        all_entries: list[dict] = []
         for ctr_dir in sorted(containers_dir.iterdir()):
             audit_file = ctr_dir / "audit.jsonl"
             if audit_file.is_file():
-                found = True
-                from .audit import AuditLogger
-
                 logger = AuditLogger(audit_path=audit_file)
-                for entry in logger.tail_log(n):
-                    print(json.dumps(entry))
-        if not found:
+                all_entries.extend(logger.tail_log(n))
+        if not all_entries:
             print("No audit logs found.")
+            return
+        all_entries.sort(key=lambda e: e.get("timestamp", ""))
+        for entry in all_entries[-n:]:
+            print(json.dumps(entry))
 
 
 def _get_version() -> str:
