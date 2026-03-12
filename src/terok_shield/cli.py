@@ -388,10 +388,15 @@ _SHIELD_MANAGED_FLAGS = frozenset(
 
 def _reject_shield_managed_flags(podman_args: list[str]) -> None:
     """Reject podman flags that conflict with shield-managed configuration."""
-    conflicts = sorted({arg for arg in podman_args if arg in _SHIELD_MANAGED_FLAGS})
+    conflicts: set[str] = set()
+    for arg in podman_args:
+        if arg.startswith("--"):
+            flag = arg.split("=", 1)[0]
+            if flag in _SHIELD_MANAGED_FLAGS:
+                conflicts.add(flag)
     if conflicts:
         raise ValueError(
-            f"Flag(s) managed by terok-shield, cannot override: {', '.join(conflicts)}"
+            f"Flag(s) managed by terok-shield, cannot override: {', '.join(sorted(conflicts))}"
         )
 
 

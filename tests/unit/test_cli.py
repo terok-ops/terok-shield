@@ -347,6 +347,21 @@ class TestMainDispatch(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 1, f"{flag} should be rejected")
             mock_cls.return_value.pre_start.assert_not_called()
 
+        # Equals-form (--flag=value) must also be rejected
+        for flag_eq in (
+            "--network=host",
+            "--name=other",
+            "--annotation=a=b",
+            "--hooks-dir=/tmp",
+            "--cap-add=NET_ADMIN",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                main(["run", "test", "--", flag_eq, "alpine:latest"])
+            self.assertEqual(ctx.exception.code, 1, f"{flag_eq} should be rejected")
+            mock_cls.return_value.pre_start.assert_not_called()
+
     @mock.patch("os.execvp")
     @mock.patch("terok_shield.cli.Shield")
     @mock.patch("terok_shield.cli._build_config")
