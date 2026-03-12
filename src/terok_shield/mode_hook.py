@@ -291,22 +291,7 @@ class HookMode:
 
         # Re-add IPs from both allowlist files
         sd = self._config.state_dir.resolve()
-        ips: list[str] = []
-        for allowlist_path in (
-            state.profile_allowed_path(sd),
-            state.live_allowed_path(sd),
-        ):
-            if allowlist_path.is_file():
-                ips.extend(
-                    line.strip() for line in allowlist_path.read_text().splitlines() if line.strip()
-                )
-        # Deduplicate preserving order
-        seen: set[str] = set()
-        unique_ips: list[str] = []
-        for ip in ips:
-            if ip not in seen:
-                seen.add(ip)
-                unique_ips.append(ip)
+        unique_ips = state.read_allowed_ips(sd)
 
         if unique_ips:
             elements_cmd = self._ruleset.add_elements_dual(unique_ips)

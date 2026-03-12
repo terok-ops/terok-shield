@@ -352,7 +352,7 @@ class TestMainOutputFormatting(unittest.TestCase):
             ctr_dir = Path(tmp) / "containers" / "test"
             ctr_dir.mkdir(parents=True)
             audit_file = ctr_dir / "audit.jsonl"
-            audit_file.write_text('{"action":"setup","timestamp":"2026-01-01T00:00:00"}\n')
+            audit_file.write_text('{"action":"setup","ts":"2026-01-01T00:00:00"}\n')
             captured = io.StringIO()
             sys.stdout = captured
             try:
@@ -706,15 +706,15 @@ class TestCmdLogsGlobal(unittest.TestCase):
                 (
                     "ctr-a",
                     [
-                        '{"action":"a1","timestamp":"2026-01-01T00:00:02"}',
-                        '{"action":"a2","timestamp":"2026-01-01T00:00:04"}',
+                        '{"action":"a1","ts":"2026-01-01T00:00:02"}',
+                        '{"action":"a2","ts":"2026-01-01T00:00:04"}',
                     ],
                 ),
                 (
                     "ctr-b",
                     [
-                        '{"action":"b1","timestamp":"2026-01-01T00:00:01"}',
-                        '{"action":"b2","timestamp":"2026-01-01T00:00:03"}',
+                        '{"action":"b1","ts":"2026-01-01T00:00:01"}',
+                        '{"action":"b2","ts":"2026-01-01T00:00:03"}',
                     ],
                 ),
             ]:

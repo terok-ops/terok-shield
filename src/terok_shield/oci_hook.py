@@ -249,21 +249,7 @@ class HookExecutor:
 
     def _read_allowed_ips(self) -> list[str]:
         """Read IPs from both profile.allowed and live.allowed, merged and deduplicated."""
-        ips: list[str] = []
-        for path in (
-            state.profile_allowed_path(self._state_dir),
-            state.live_allowed_path(self._state_dir),
-        ):
-            if path.is_file():
-                ips.extend(line.strip() for line in path.read_text().splitlines() if line.strip())
-        # Deduplicate preserving order
-        seen: set[str] = set()
-        unique: list[str] = []
-        for ip in ips:
-            if ip not in seen:
-                seen.add(ip)
-                unique.append(ip)
-        return unique
+        return state.read_allowed_ips(self._state_dir)
 
     def _nft_exec(
         self,

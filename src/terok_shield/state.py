@@ -60,6 +60,25 @@ def audit_path(state_dir: Path) -> Path:
     return state_dir / "audit.jsonl"
 
 
+def read_allowed_ips(state_dir: Path) -> list[str]:
+    """Read IPs from both profile.allowed and live.allowed, merged and deduplicated.
+
+    Returns a stable-order list: profile IPs first, then live IPs, with
+    duplicates removed (first occurrence wins).
+    """
+    ips: list[str] = []
+    for path in (profile_allowed_path(state_dir), live_allowed_path(state_dir)):
+        if path.is_file():
+            ips.extend(line.strip() for line in path.read_text().splitlines() if line.strip())
+    seen: set[str] = set()
+    unique: list[str] = []
+    for ip in ips:
+        if ip not in seen:
+            seen.add(ip)
+            unique.append(ip)
+    return unique
+
+
 def ensure_state_dirs(state_dir: Path) -> None:
     """Create the state directory and its required subdirectories."""
     state_dir.mkdir(parents=True, exist_ok=True)

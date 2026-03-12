@@ -371,7 +371,7 @@ def _collect_all_audit_entries(state_root: Path, n: int) -> list[dict]:
         audit_file = ctr_dir / "audit.jsonl"
         if audit_file.is_file():
             entries.extend(AuditLogger(audit_path=audit_file).tail_log(n))
-    entries.sort(key=lambda e: e.get("timestamp", ""))
+    entries.sort(key=lambda e: e.get("ts", ""))
     return entries[-n:]
 
 
