@@ -18,6 +18,7 @@ destinations — everything else is dropped.
 - **Default-deny egress** with curated allowlists (domains and IPs)
 - **DNS-based allowlisting** — domain names resolved before container start, cached automatically
 - **Live allow/deny** at runtime for individual containers
+- **Per-container isolation** — each container gets its own state bundle, hooks, and audit log
 - **Connection audit logging** (JSON-lines lifecycle logs + kernel-level per-packet nftables logs)
 - **Fail-closed**: hook failure prevents the container from starting
 
@@ -36,18 +37,7 @@ pip install terok-shield
 
 ## Quick start
 
-### 1. Install the firewall hook
-
-```bash
-terok-shield setup
-terok-shield status       # verify installation
-```
-
-This installs an OCI hook that fires when annotated containers start.
-No changes to your Dockerfiles or container images are needed — the firewall
-is applied externally at container creation time.
-
-### 2. Choose your allowlists
+### 1. Choose your allowlists
 
 terok-shield ships with several bundled profiles
 (see [Allowlist Profiles](https://terok-ai.github.io/terok-shield/guide/profiles/)):
@@ -72,7 +62,7 @@ cdn.example.com
 EOF
 ```
 
-### 3. Start a container with the shield
+### 2. Start a container with the shield
 
 ```bash
 terok-shield resolve my-container    # pre-resolve DNS → cached IPs
@@ -80,7 +70,9 @@ terok-shield resolve my-container    # pre-resolve DNS → cached IPs
 podman run --rm -it \
   --name my-container \
   --annotation terok.shield.profiles=dev-standard,my-project \
-  --hooks-dir ~/.local/state/terok-shield/hooks \
+  --annotation terok.shield.state_dir=$HOME/.local/state/terok-shield/containers/my-container \
+  --annotation terok.shield.version=1 \
+  --hooks-dir ~/.local/state/terok-shield/containers/my-container/hooks \
   --cap-drop NET_ADMIN --cap-drop NET_RAW \
   --security-opt no-new-privileges \
   alpine:latest sh
@@ -89,7 +81,7 @@ podman run --rm -it \
 The container starts with a default-deny firewall — only destinations in the
 `dev-standard` and `my-project` profiles are reachable.
 
-### 4. Allow a domain at runtime
+### 3. Allow a domain at runtime
 
 ```bash
 terok-shield allow my-container example.com

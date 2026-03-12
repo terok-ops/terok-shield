@@ -5,7 +5,8 @@ logs and kernel-level per-packet nftables logs.
 
 ## Application logs (JSON-lines)
 
-Firewall events are logged to `~/.local/state/terok-shield/logs/<container>.jsonl`.
+Each container has its own audit log at `{state_dir}/audit.jsonl` (e.g.
+`~/.local/state/terok-shield/containers/my-container/audit.jsonl`).
 
 Each line is a JSON object:
 
@@ -22,6 +23,8 @@ Each line is a JSON object:
 | `setup` | Firewall setup step (ruleset applied, IPs loaded, verification) |
 | `allowed` | Domain/IP added to allow set at runtime |
 | `denied` | Domain/IP removed from allow set at runtime |
+| `shield_down` | Container switched to bypass mode |
+| `shield_up` | Container restored to deny-all mode |
 | `note` | Advisory event (e.g. RFC1918, IPv6 ULA, or link-local address allowlisted) |
 | `error` | Something failed |
 
@@ -66,17 +69,10 @@ journalctl -k --grep TEROK_SHIELD
 
 In `~/.config/terok-shield/config.yml`:
 
-To disable logging of allowed connections only (denied connections are still logged):
-
-```yaml
-audit:
-  enabled: true
-  log_allowed: false
-```
-
-To disable all application logging:
-
 ```yaml
 audit:
   enabled: false
 ```
+
+This disables all application-level logging. Kernel packet logs are
+controlled by the nftables ruleset and remain active regardless.

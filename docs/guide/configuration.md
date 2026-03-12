@@ -14,7 +14,6 @@ default_profiles:
 loopback_ports: []      # TCP ports forwarded to host loopback (e.g. [8080, 9090])
 audit:
   enabled: true
-  log_allowed: true
 ```
 
 | Key | Default | Description |
@@ -23,9 +22,12 @@ audit:
 | `default_profiles` | `["dev-standard"]` | Profiles used when resolving without explicit profile list |
 | `loopback_ports` | `[]` | TCP ports forwarded to host loopback (via pasta `-T`) |
 | `audit.enabled` | `true` | Enable JSON-lines audit logging |
-| `audit.log_allowed` | `true` | Log allowed connections (not just denied) |
 
 If the config file is missing or unparseable, defaults are used.
+
+!!! note "Library vs CLI"
+    The config file is only read by the CLI. When using terok-shield as a
+    library, all configuration is passed programmatically via `ShieldConfig`.
 
 ### Mode selection
 
@@ -35,36 +37,50 @@ topologies.
 
 ## Directories
 
-All paths follow XDG conventions and can be overridden with environment variables.
-
 ### State directory
 
 Default: `~/.local/state/terok-shield/`
-Override: `TEROK_SHIELD_STATE_DIR`
+Override: `TEROK_SHIELD_STATE_DIR` or `--state-dir` flag
 
-| Subdirectory | Contents |
-|-------------|----------|
-| `hooks/` | OCI hook JSON descriptor and entrypoint script |
-| `resolved/` | Pre-resolved IP cache files (one per container) |
-| `logs/` | Audit logs (JSON-lines, one file per container) |
-| `dns/` | Downloaded DNS allowlists |
+Each container gets an isolated state bundle under `containers/`:
+
+```text
+~/.local/state/terok-shield/
+└── containers/
+    └── my-container/
+        ├── hooks/
+        │   ├── terok-shield-createRuntime.json
+        │   └── terok-shield-poststop.json
+        ├── terok-shield-hook       # OCI hook entrypoint script
+        ├── profile.allowed         # Pre-resolved IPs from DNS profiles
+        ├── live.allowed            # IPs from runtime allow/deny
+        └── audit.jsonl             # Per-container audit log
+```
+
+| File | Written by | Purpose |
+|------|-----------|---------|
+| `hooks/` | `pre_start()` | OCI hook descriptors |
+| `terok-shield-hook` | `pre_start()` | Hook entrypoint script |
+| `profile.allowed` | `pre_start()` / `resolve()` | Cached IPs from DNS resolution |
+| `live.allowed` | `allow()` / `deny()` | Runtime allow/deny persistence |
+| `audit.jsonl` | Hook + Shield methods | Per-container audit log |
 
 ### Config directory
 
 Default: `~/.config/terok-shield/`
 Override: `TEROK_SHIELD_CONFIG_DIR`
 
-| Subdirectory | Contents |
-|-------------|----------|
+| Path | Contents |
+|------|----------|
 | `profiles/` | Custom allowlist profiles (override bundled ones) |
 | `config.yml` | Shield configuration |
 
 ## DNS caching
 
-Resolved IPs are stored in `<state_dir>/resolved/<container>.resolved` as
-plain text, one IP per line. The cache uses file modification time
-(`st_mtime`) for freshness checking — entries older than 1 hour are
-automatically re-resolved.
+Resolved IPs are stored in `profile.allowed` inside each container's state
+directory, one IP per line. The cache uses file modification time (`st_mtime`)
+for freshness checking — entries older than 1 hour are automatically
+re-resolved.
 
 Force a cache refresh:
 
@@ -80,3 +96,16 @@ terok-shield resolve my-container --force
 | `TEROK_SHIELD_CONFIG_DIR` | Override config directory location |
 | `XDG_STATE_HOME` | XDG state base (default: `~/.local/state`) |
 | `XDG_CONFIG_HOME` | XDG config base (default: `~/.config`) |
+
+## OCI annotations
+
+These annotations are set by `pre_start()` and read by the OCI hook:
+
+| Annotation | Value | Purpose |
+|------------|-------|---------|
+| `terok.shield.profiles` | Comma-separated names | Which profiles to apply |
+| `terok.shield.name` | Container name | Audit log identification |
+| `terok.shield.state_dir` | Absolute path | Where the hook finds its state bundle |
+| `terok.shield.loopback_ports` | Comma-separated ints | Ports for ruleset generation |
+| `terok.shield.version` | Integer | Bundle version (hard-fail on mismatch) |
+| `terok.shield.audit_enabled` | `true` / `false` | Whether to write audit logs |

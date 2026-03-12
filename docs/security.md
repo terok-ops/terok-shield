@@ -115,16 +115,18 @@ family-specific ICMP errors:
 
 ## Fail-closed guarantees
 
-After `terok-shield setup`, this invariant holds: **no path from "firewall
-setup failed" to "container running unrestricted."**
+After `pre_start()` installs hooks, this invariant holds: **no path from
+"firewall setup failed" to "container running unrestricted."**
 
 | Failure | Result |
 |---------|--------|
 | OCI hook raises an exception | Container torn down by podman (non-zero exit) |
 | `nft` binary missing | `ExecError` → hook exits non-zero → torn down |
-| Profile not found | `FileNotFoundError` → hook exits → torn down |
+| `state_dir` annotation missing | Hook exits non-zero → torn down |
+| Bundle version mismatch | Hook exits non-zero → torn down |
+| Allowlist file unreadable | Hook exits non-zero → torn down |
 | Ruleset fails to load | Hook exits → torn down |
 | Self-verification fails | Hook exits → torn down |
 
-Before setup, containers start without firewall rules (standard mode prints a
-warning). The fail-closed guarantee only applies after setup completes.
+The fail-closed guarantee applies once hooks are installed by `pre_start()`.
+Without hooks, containers start without firewall rules.

@@ -8,8 +8,9 @@ Uses OCI hooks to apply per-container nftables rules inside the container's own
 network namespace. Each container gets an isolated firewall. Works with pasta
 (rootless default) and slirp4netns.
 
-Lifecycle: `shield_setup()` installs the OCI hook script. On each container
-start, the hook applies the ruleset and loads cached IPs into the allow set.
+Lifecycle: `Shield.pre_start()` installs the OCI hook (idempotent), resolves DNS,
+writes `profile.allowed`, and returns podman args with annotations. On each
+container start, the OCI hook reads those annotations and applies the ruleset.
 
 ## Allowlisting
 
@@ -17,8 +18,9 @@ Allowlists are `.txt` files with one entry per line — domain names or raw
 IP/CIDRs. Lines starting with `#` are comments.
 
 Bundled defaults use domain names because they're stable across IP rotations and
-easy to audit. Resolution happens via `dig +short A` at setup/runtime. Resolved
-IPs are cached with `st_mtime`-based freshness (default 1 hour).
+easy to audit. Resolution happens via `dig +short A` at pre-start time. Resolved
+IPs are cached in `profile.allowed` with `st_mtime`-based freshness (default
+1 hour).
 
 ### Bundled profiles
 
@@ -36,8 +38,8 @@ Users can add custom profiles in `$XDG_CONFIG_HOME/terok-shield/profiles/`.
 
 ### JSON-lines lifecycle logs
 
-Firewall events are written as JSON-lines to `state_dir/logs/{container}.jsonl`.
-Each `apply_hook()` step produces a separate entry:
+Each container has its own audit log at `{state_dir}/audit.jsonl`. Each
+`HookExecutor.apply()` step produces a separate entry:
 
 ```json
 {"ts":"...","container":"myproj-1","action":"setup","detail":"ruleset applied"}
@@ -46,8 +48,9 @@ Each `apply_hook()` step produces a separate entry:
 ```
 
 Detail lines prefixed with `[ips]` contain full IP lists. The `"note"` action
-is used for RFC1918 and link-local allowlisting events. Audit logging is best-effort — failures
-are silently ignored to avoid blocking container operations.
+is used for RFC1918 and link-local allowlisting events. Audit logging is
+best-effort — failures are silently ignored to avoid blocking container
+operations.
 
 ### Kernel per-packet logs
 
@@ -59,22 +62,31 @@ nftables log rules generate per-packet entries in dmesg/journald:
 
 ## Public API
 
-The package exports a lifecycle-oriented API for integration with
+The package exports a `Shield` facade class for integration with
 [terok](https://github.com/terok-ai/terok):
 
-| Function | Purpose |
-|----------|---------|
-| `shield_setup()` | Install OCI hook |
-| `shield_status()` | Return mode, profiles, audit config |
-| `shield_pre_start()` | Return extra podman args |
-| `shield_resolve()` | Resolve DNS profiles and cache results |
-| `shield_allow()` | Live-allow a domain/IP for a running container |
-| `shield_deny()` | Live-deny a domain/IP (best-effort) |
-| `shield_rules()` | Return current nft ruleset for a container |
+```python
+from terok_shield import Shield, ShieldConfig
+shield = Shield(ShieldConfig(state_dir=Path("/path/to/state")))
+```
 
-All functions accept an optional `config: ShieldConfig` parameter (defaults to
-`load_shield_config()` if `None`). The config is a frozen dataclass with mode,
-default profiles, loopback ports, and audit settings.
+| Method | Purpose |
+|--------|---------|
+| `pre_start(container, profiles)` | Install hooks, resolve DNS, return extra podman args |
+| `allow(container, target)` | Live-allow a domain/IP for a running container |
+| `deny(container, target)` | Live-deny a domain/IP (best-effort) |
+| `down(container)` | Switch to bypass mode (accept-all + log) |
+| `up(container)` | Restore deny-all mode |
+| `state(container)` | Query container shield state (`UP`, `DOWN`, `DOWN_ALL`, `INACTIVE`) |
+| `rules(container)` | Return current nft ruleset for a container |
+| `resolve(container, profiles)` | Resolve DNS profiles and cache results |
+| `status()` | Return mode, profiles, audit config |
+| `preview(down, allow_all)` | Show ruleset that would be applied |
+
+`ShieldConfig` is a frozen dataclass with required `state_dir: Path` and
+optional mode, default profiles, loopback ports, profiles dir, and audit
+settings. The library never reads environment variables or config files — all
+configuration comes from the caller.
 
 terok imports terok-shield as a library dependency and calls the Python API
 directly — never the CLI.
@@ -83,17 +95,20 @@ directly — never the CLI.
 
 | Module | Role |
 |--------|------|
+| `__init__.py` | `Shield` facade — public API entry point |
 | `nft.py` | **Security boundary** — ruleset generation, input validation, self-verification |
 | `nft_constants.py` | Shared literals (`NFT_TABLE`, `RFC1918`) — no logic |
-| `config.py` | `ShieldConfig`, `ShieldMode`, path helpers, config loading |
-| `mode_hook.py` | Hook mode lifecycle (OCI hooks, per-container netns) |
+| `config.py` | `ShieldConfig`, `ShieldMode`, `ShieldState`, `ShieldModeBackend` protocol, annotation constants |
+| `state.py` | Per-container state bundle layout — pure path derivation, zero deps |
+| `mode_hook.py` | Hook mode strategy (OCI hooks, per-container netns) |
 | `oci_hook.py` | OCI hook entry point — fail-closed firewall application |
-| `dns.py` | DNS resolution via `dig`, timestamp-based caching |
+| `dns.py` | Stateless DNS resolution via `dig`, file-based caching |
 | `profiles.py` | Profile loading and composition |
-| `audit.py` | JSON-lines audit logging |
+| `audit.py` | JSON-lines audit logging (single file per container) |
 | `run.py` | Subprocess wrappers (`nft`, `nsenter`, `dig`, `podman`) |
+| `validation.py` | Input validation (container names, path safety) |
 | `util.py` | Small shared utilities |
-| `cli.py` | Standalone CLI entry point |
+| `cli.py` | Standalone CLI entry point + config construction from env/YAML |
 
 Module boundaries are enforced by [tach](https://github.com/gauge-sh/tach)
 (`tach.toml`). The critical constraint: `nft.py` may only import from

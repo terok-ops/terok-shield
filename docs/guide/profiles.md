@@ -92,8 +92,8 @@ terok-shield resolve my-container
 ```
 
 This resolves all domains from the configured profiles using `dig` and caches
-the results. The cache is automatically refreshed when stale (default: 1 hour).
-Force a refresh with:
+the results in the container's `profile.allowed` file. The cache is
+automatically refreshed when stale (default: 1 hour). Force a refresh with:
 
 ```bash
 terok-shield resolve my-container --force
