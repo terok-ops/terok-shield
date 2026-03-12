@@ -157,7 +157,12 @@ class HookExecutor:
         self._resolved_dir = resolved_dir
 
     def apply(self, container: str, pid: str) -> None:
-        """Apply ruleset, load cached IPs, verify.  Fail-closed."""
+        """Apply ruleset, load cached IPs, verify.  Fail-closed.
+
+        Intentionally logs two "setup" audit events at different granularity:
+        ``_apply_ruleset`` logs the raw nft apply, this method logs the
+        high-level summary with IP count.
+        """
         self._apply_ruleset(container, pid)
         ip_count = self._load_and_add_ips(container, pid)
         self._verify(container, pid)
