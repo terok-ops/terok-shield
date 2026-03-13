@@ -17,7 +17,7 @@ class TestRulesetBuilderInit:
     def test_default_init(self) -> None:
         """Default construction succeeds."""
         builder = RulesetBuilder()
-        assert builder is not None
+        assert isinstance(builder, RulesetBuilder)
 
     def test_custom_dns(self) -> None:
         """Accept a custom DNS address."""

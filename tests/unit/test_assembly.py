@@ -65,18 +65,18 @@ class TestConstructorContracts:
         """AuditLogger takes audit_path=, not log_dir."""
         with tempfile.TemporaryDirectory() as tmp:
             logger = AuditLogger(audit_path=Path(tmp) / "audit.jsonl")
-            assert logger is not None
+            assert isinstance(logger, AuditLogger)
 
     def test_ruleset_builder_constructor(self) -> None:
         """RulesetBuilder accepts loopback_ports."""
         rb = RulesetBuilder(loopback_ports=(8080, 9090))
-        assert rb is not None
+        assert isinstance(rb, RulesetBuilder)
 
     def test_profile_loader_constructor(self) -> None:
         """ProfileLoader accepts user_dir."""
         with tempfile.TemporaryDirectory() as tmp:
             loader = ProfileLoader(user_dir=Path(tmp))
-            assert loader is not None
+            assert isinstance(loader, ProfileLoader)
 
 
 class TestDnsResolverCacheContract:
