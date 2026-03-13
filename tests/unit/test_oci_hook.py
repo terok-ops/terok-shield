@@ -5,6 +5,7 @@
 
 import ipaddress
 import json
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -245,7 +246,7 @@ def test_hook_main_handles_pid_requirements(stdin_data: str, stage: str, expecte
 )
 def test_hook_main_rejects_invalid_annotations(
     tmp_path: Path,
-    mutate: callable,
+    mutate: Callable[[dict[str, str]], object],
     expected: int,
 ) -> None:
     """hook_main() fails closed when required annotations are missing or invalid."""

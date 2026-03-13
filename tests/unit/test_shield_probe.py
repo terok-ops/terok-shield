@@ -5,7 +5,7 @@
 
 import json
 import struct
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,9 +21,11 @@ from terok_shield.resources.shield_probe import (
 
 from ..testnet import TEST_IP1
 
+ProbeResultFactory = Callable[..., dict[str, object]]
+
 
 @pytest.fixture
-def make_probe_result() -> Iterator[callable]:
+def make_probe_result() -> Iterator[ProbeResultFactory]:
     """Return a helper that runs probe() with mocked socket/poll collaborators."""
 
     def _make_probe_result(
@@ -114,7 +116,7 @@ def _make_ancdata(ee_errno: int, ee_origin: int, ee_type: int, ee_code: int) -> 
     ],
 )
 def test_probe_mocked_paths(
-    make_probe_result: callable,
+    make_probe_result: ProbeResultFactory,
     poll_returns: list[list[tuple[int, int]]],
     recvmsg_result: tuple[bytes, list, int, tuple[str, int]] | None,
     send_side_effect: object | None,
@@ -142,7 +144,7 @@ def test_probe_returns_timeout_when_recvmsg_fails() -> None:
             assert probe(TEST_IP1, 443, timeout=1.0)["result"] == "timeout"
 
 
-def test_probe_skips_truncated_ancdata(make_probe_result: callable) -> None:
+def test_probe_skips_truncated_ancdata(make_probe_result: ProbeResultFactory) -> None:
     """Truncated ancillary data is ignored and falls back to timeout."""
     from terok_shield.resources.shield_probe import _IP_RECVERR
 
@@ -153,7 +155,7 @@ def test_probe_skips_truncated_ancdata(make_probe_result: callable) -> None:
     assert result["result"] == "timeout"
 
 
-def test_probe_skips_non_icmp_origin(make_probe_result: callable) -> None:
+def test_probe_skips_non_icmp_origin(make_probe_result: ProbeResultFactory) -> None:
     """Only ICMP-origin error queue entries are interpreted."""
     result = make_probe_result(
         [[(0, 8)]],

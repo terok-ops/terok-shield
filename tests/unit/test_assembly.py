@@ -26,9 +26,6 @@ from ..testfs import FAKE_RESOLVED_DIR
 from ..testnet import TEST_DOMAIN, TEST_IP1, TEST_IP2
 from .helpers import write_lines
 
-_AUDIT_LOG_FILENAME = "audit.jsonl"
-_PROFILE_ALLOWED_FILENAME = "profile.allowed"
-
 
 @pytest.fixture
 def make_hook_mode(tmp_path: Path) -> Callable[..., HookMode]:
@@ -79,7 +76,7 @@ def test_dns_resolver_rejects_resolved_dir() -> None:
 
 def test_audit_logger_accepts_audit_path(tmp_path: Path) -> None:
     """AuditLogger takes audit_path=, not log_dir."""
-    assert isinstance(AuditLogger(audit_path=tmp_path / _AUDIT_LOG_FILENAME), AuditLogger)
+    assert isinstance(AuditLogger(audit_path=state.audit_path(tmp_path)), AuditLogger)
 
 
 def test_ruleset_builder_constructor() -> None:
@@ -98,7 +95,7 @@ def test_resolve_and_cache_accepts_cache_path(tmp_path: Path) -> None:
     runner.dig_all.return_value = [TEST_IP1]
     resolver = DnsResolver(runner=runner)
 
-    cache_path = tmp_path / _PROFILE_ALLOWED_FILENAME
+    cache_path = state.profile_allowed_path(tmp_path)
     ips = resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
     assert TEST_IP1 in ips
     assert cache_path.is_file()
@@ -110,7 +107,7 @@ def test_resolve_and_cache_reuses_fresh_cache(tmp_path: Path) -> None:
     runner = mock.MagicMock()
     runner.dig_all.return_value = [TEST_IP1]
     resolver = DnsResolver(runner=runner)
-    cache_path = tmp_path / _PROFILE_ALLOWED_FILENAME
+    cache_path = state.profile_allowed_path(tmp_path)
 
     resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
     runner.dig_all.reset_mock()

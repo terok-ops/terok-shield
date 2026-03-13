@@ -180,7 +180,7 @@ def test_nft_exec_returns_runner_output(
     ],
 ) -> None:
     """_nft_exec() returns the runner output on success."""
-    executor, runner, _, _ = make_executor(runner=mock.MagicMock())
+    executor, runner, _, _ = make_executor()
     runner.nft_via_nsenter.return_value = "output"
     assert executor._nft_exec("test-ctr", "42", "list", "ruleset") == "output"
 
@@ -201,7 +201,7 @@ def test_nft_exec_converts_exec_error_to_runtime_error(
 ) -> None:
     """_nft_exec() logs and re-raises runner failures as RuntimeError."""
     audit = mock.MagicMock()
-    executor, runner, _, _ = make_executor(runner=mock.MagicMock(), audit=audit)
+    executor, runner, _, _ = make_executor(audit=audit)
     runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "fail")
 
     kwargs = {"stdin": "rules", "action": action} if action else {}
@@ -258,7 +258,7 @@ def test_apply_fails_closed_when_reading_cached_ips_fails(
     error: Exception,
 ) -> None:
     """Cache read failures are converted into RuntimeError before nft verification."""
-    executor, runner, _, ruleset = make_executor(runner=mock.MagicMock())
+    executor, runner, _, ruleset = make_executor()
     runner.nft_via_nsenter.return_value = ""
     ruleset.build_hook.return_value = "hook"
 

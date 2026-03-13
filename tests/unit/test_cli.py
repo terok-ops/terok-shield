@@ -10,6 +10,7 @@ import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -471,7 +472,7 @@ def test_misc_dispatch_paths(
     cli_dispatch: CliDispatchHarness,
     argv: list[str],
     method_name: str,
-    expected_call: mock._Call,
+    expected_call: Any,
 ) -> None:
     """Simple CLI subcommands dispatch to the expected Shield methods."""
     if method_name == "preview":
@@ -481,14 +482,11 @@ def test_misc_dispatch_paths(
     elif method_name == "profiles_list":
         cli_dispatch.shield.profiles_list.return_value = ["dev-standard", "dev-python"]
 
-    if argv[0] == "preview":
-        main(argv)
-    else:
-        main(argv)
+    main(argv)
 
-    getattr(cli_dispatch.shield, method_name).assert_called_once_with(
-        *expected_call.args, **expected_call.kwargs
-    )
+    dispatched = getattr(cli_dispatch.shield, method_name)
+    assert dispatched.call_count == 1
+    assert dispatched.call_args == expected_call
 
 
 def test_rules_dispatches_to_state_and_rules(cli_dispatch: CliDispatchHarness) -> None:

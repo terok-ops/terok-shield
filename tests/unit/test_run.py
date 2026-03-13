@@ -90,15 +90,39 @@ def test_run_raises_on_failure(runner: SubprocessRunner, subprocess_run: mock.Mo
 
 
 @pytest.mark.parametrize(
-    ("check", "expected_rc", "expected_result", "expected_message"),
+    ("check", "expected_rc", "expected_result"),
     [
-        pytest.param(True, 127, None, None, id="missing-binary-raises"),
-        pytest.param(False, None, "", None, id="missing-binary-empty"),
-        pytest.param(True, -1, None, "timed out", id="timeout-raises"),
-        pytest.param(False, None, "", None, id="timeout-empty"),
+        pytest.param(True, 127, None, id="raises"),
+        pytest.param(False, None, "", id="returns-empty"),
     ],
 )
-def test_run_handles_missing_binary_and_timeout(
+def test_run_handles_missing_binary(
+    runner: SubprocessRunner,
+    subprocess_run: mock.Mock,
+    *,
+    check: bool,
+    expected_rc: int | None,
+    expected_result: str | None,
+) -> None:
+    """run() converts missing binaries into a stable ExecError or empty result."""
+    subprocess_run.side_effect = FileNotFoundError("No such file")
+
+    if check:
+        with pytest.raises(ExecError) as ctx:
+            runner.run(["nonexistent"], check=check, timeout=5)
+        assert ctx.value.rc == expected_rc
+    else:
+        assert runner.run(["nonexistent"], check=check, timeout=5) == expected_result
+
+
+@pytest.mark.parametrize(
+    ("check", "expected_rc", "expected_result", "expected_message"),
+    [
+        pytest.param(True, -1, None, "timed out", id="raises"),
+        pytest.param(False, None, "", None, id="returns-empty"),
+    ],
+)
+def test_run_handles_timeout(
     runner: SubprocessRunner,
     subprocess_run: mock.Mock,
     *,
@@ -106,31 +130,18 @@ def test_run_handles_missing_binary_and_timeout(
     expected_rc: int | None,
     expected_result: str | None,
     expected_message: str | None,
-    request: pytest.FixtureRequest,
 ) -> None:
-    """run() converts missing binaries and timeouts into stable outcomes."""
-    if "timeout" in request.node.callspec.id:
-        subprocess_run.side_effect = subprocess.TimeoutExpired(["slow-cmd"], 5)
-    else:
-        subprocess_run.side_effect = FileNotFoundError("No such file")
+    """run() converts timeouts into a stable ExecError or empty result."""
+    subprocess_run.side_effect = subprocess.TimeoutExpired(["slow-cmd"], 5)
 
     if check:
         with pytest.raises(ExecError) as ctx:
-            runner.run(
-                ["slow-cmd" if "timeout" in request.node.callspec.id else "nonexistent"],
-                check=check,
-                timeout=5,
-            )
+            runner.run(["slow-cmd"], check=check, timeout=5)
         assert ctx.value.rc == expected_rc
         if expected_message is not None:
             assert expected_message in ctx.value.stderr
     else:
-        result = runner.run(
-            ["slow-cmd" if "timeout" in request.node.callspec.id else "nonexistent"],
-            check=check,
-            timeout=5,
-        )
-        assert result == expected_result
+        assert runner.run(["slow-cmd"], check=check, timeout=5) == expected_result
 
 
 @pytest.mark.parametrize(
