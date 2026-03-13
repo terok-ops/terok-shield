@@ -35,6 +35,7 @@ NONEXISTENT_SENTINEL: str = str(NONEXISTENT_DIR / "sentinel")
 
 FORBIDDEN_TRAVERSAL = "../nonexistent/forbidden"
 FORBIDDEN_ABSOLUTE = "/nonexistent/forbidden"
+RELATIVE_STATE_SUBPATH = "relative/path"
 
 # ── Volume mount paths (for CLI run/prepare tests) ──
 # These are podman -v bind-mount strings, not real filesystem paths.
@@ -46,3 +47,16 @@ STATE_DIR_WITH_SPACES = "/path/with spaces/dir"
 # ── Binary paths (for mocking shutil.which results) ──
 
 NFT_BINARY = "/usr/bin/nft"
+
+# ── Well-known terok-shield path segments used in tests ──
+
+STATE_ROOT_NAME = "state"
+CONFIG_ROOT_NAME = "config"
+CONTAINERS_DIR_NAME = "containers"
+CONFIG_FILENAME = "config.yml"
+AUDIT_FILENAME = "audit.jsonl"
+TEST_CACHE_FILENAME = "test.resolved"
+TEST_SUBDIR_NAME = "subdir"
+BIN_DIR_NAME = "bin"
+HOOKS_DIR_NAME = "hooks"
+HOOK_ENTRYPOINT_NAME = "terok-shield-hook"

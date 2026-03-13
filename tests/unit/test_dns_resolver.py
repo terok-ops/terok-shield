@@ -4,14 +4,17 @@
 """Tests for the DnsResolver class."""
 
 import os
-import tempfile
-import unittest
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
+from terok_shield import state
 from terok_shield.dns import DnsResolver
 
-from ..testfs import NONEXISTENT_DIR
+from ..testfs import NONEXISTENT_DIR, TEST_CACHE_FILENAME, TEST_SUBDIR_NAME
 from ..testnet import (
     CLOUDFLARE_DOMAIN,
     GOOGLE_DNS_DOMAIN,
@@ -24,137 +27,165 @@ from ..testnet import (
 )
 
 
-class TestDnsResolverInit(unittest.TestCase):
-    """Test DnsResolver construction."""
+@dataclass
+class ResolverHarness:
+    """A ``DnsResolver`` plus its injected runner mock."""
 
-    def test_direct_init(self) -> None:
-        """Construct with explicit runner."""
-        runner = mock.MagicMock()
-        resolver = DnsResolver(runner=runner)
-        self.assertIs(resolver._runner, runner)
+    resolver: DnsResolver
+    runner: mock.MagicMock
 
 
-class TestDnsResolverCache(unittest.TestCase):
-    """Test DnsResolver._read_cache and _write_cache."""
-
-    def test_read_cache_missing_file(self) -> None:
-        """Return empty list for missing cache file."""
-        result = DnsResolver._read_cache(NONEXISTENT_DIR / "file.resolved")
-        self.assertEqual(result, [])
-
-    def test_read_write_roundtrip(self) -> None:
-        """Write then read cache produces same IPs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "test.resolved"
-            DnsResolver._write_cache(path, [TEST_IP1, TEST_IP2])
-            result = DnsResolver._read_cache(path)
-            self.assertEqual(result, [TEST_IP1, TEST_IP2])
-
-    def test_write_creates_parent_dirs(self) -> None:
-        """_write_cache creates parent directories."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "subdir" / "test.resolved"
-            DnsResolver._write_cache(path, [TEST_IP1])
-            self.assertTrue(path.is_file())
-
-    def test_write_empty_list(self) -> None:
-        """_write_cache writes empty content for empty list."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "test.resolved"
-            DnsResolver._write_cache(path, [])
-            self.assertEqual(path.read_text(), "")
+ResolverHarnessFactory = Callable[..., ResolverHarness]
 
 
-class TestDnsResolverResolveDomains(unittest.TestCase):
-    """Test DnsResolver.resolve_domains()."""
+@pytest.fixture
+def make_resolver() -> ResolverHarnessFactory:
+    """Build a resolver plus its injected runner mock."""
 
-    def test_resolves_multiple(self) -> None:
-        """Resolve multiple domains and deduplicate."""
-        runner = mock.MagicMock()
-        runner.dig_all.side_effect = [[TEST_IP1, IPV6_CLOUDFLARE], [TEST_IP2]]
-        resolver = DnsResolver(runner=runner)
+    def _make_resolver(**runner_kwargs: object) -> ResolverHarness:
+        runner = mock.MagicMock(**runner_kwargs)
+        return ResolverHarness(resolver=DnsResolver(runner=runner), runner=runner)
 
-        result = resolver.resolve_domains([CLOUDFLARE_DOMAIN, GOOGLE_DNS_DOMAIN])
-        self.assertEqual(result, [TEST_IP1, IPV6_CLOUDFLARE, TEST_IP2])
-
-    def test_deduplicates(self) -> None:
-        """Duplicate IPs across domains are deduplicated."""
-        runner = mock.MagicMock()
-        runner.dig_all.side_effect = [[TEST_IP1], [TEST_IP1, TEST_IP2]]
-        resolver = DnsResolver(runner=runner)
-
-        result = resolver.resolve_domains([TEST_DOMAIN, TEST_DOMAIN2])
-        self.assertEqual(result, [TEST_IP1, TEST_IP2])
-
-    def test_logs_warning_for_unresolvable(self) -> None:
-        """Log warning when a domain resolves to no IPs."""
-        runner = mock.MagicMock()
-        runner.dig_all.side_effect = [[TEST_IP1], []]
-        resolver = DnsResolver(runner=runner)
-
-        with self.assertLogs("terok_shield.dns", level="WARNING") as cm:
-            resolver.resolve_domains([CLOUDFLARE_DOMAIN, NONEXISTENT_DOMAIN])
-        self.assertEqual(len(cm.output), 1)
-        self.assertIn(NONEXISTENT_DOMAIN, cm.output[0])
-
-    def test_empty_input(self) -> None:
-        """Empty domain list returns empty result."""
-        runner = mock.MagicMock()
-        resolver = DnsResolver(runner=runner)
-        result = resolver.resolve_domains([])
-        self.assertEqual(result, [])
-        runner.dig_all.assert_not_called()
+    return _make_resolver
 
 
-class TestDnsResolverResolveAndCache(unittest.TestCase):
-    """Test DnsResolver.resolve_and_cache()."""
+def test_direct_init() -> None:
+    """Construct with an explicit runner."""
+    runner = mock.MagicMock()
+    assert DnsResolver(runner=runner)._runner is runner
 
-    def test_resolves_and_writes_cache(self) -> None:
-        """Resolve domains and write cache file."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.dig_all.return_value = [TEST_IP1]
-            resolver = DnsResolver(runner=runner)
 
-            cache_path = Path(tmp) / "profile.allowed"
-            result = resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
-            self.assertEqual(result, [TEST_IP1])
-            self.assertTrue(cache_path.is_file())
+def test_read_cache_missing_file() -> None:
+    """_read_cache() returns an empty list for a missing cache file."""
+    assert DnsResolver._read_cache(NONEXISTENT_DIR / TEST_CACHE_FILENAME) == []
 
-    def test_returns_cached_if_fresh(self) -> None:
-        """Return cached IPs without resolving if cache is fresh."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            resolver = DnsResolver(runner=runner)
-            cache_path = Path(tmp) / "profile.allowed"
-            cache_path.write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
 
-            result = resolver.resolve_and_cache([TEST_DOMAIN], cache_path, max_age=3600)
-            self.assertEqual(result, [TEST_IP1, TEST_IP2])
-            runner.dig_all.assert_not_called()
+def test_read_write_roundtrip(tmp_path: Path) -> None:
+    """_write_cache() and _read_cache() round-trip cached IPs."""
+    cache_path = tmp_path / TEST_CACHE_FILENAME
+    DnsResolver._write_cache(cache_path, [TEST_IP1, TEST_IP2])
+    assert DnsResolver._read_cache(cache_path) == [TEST_IP1, TEST_IP2]
 
-    def test_re_resolves_stale_cache(self) -> None:
-        """Re-resolve when cache is stale."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.dig_all.return_value = [TEST_IP2]
-            resolver = DnsResolver(runner=runner)
-            cache_path = Path(tmp) / "profile.allowed"
-            cache_path.write_text(f"{TEST_IP1}\n")
-            os.utime(cache_path, (0, 0))  # epoch = very stale
 
-            result = resolver.resolve_and_cache([TEST_DOMAIN], cache_path, max_age=3600)
-            self.assertEqual(result, [TEST_IP2])
-            runner.dig_all.assert_called_once()
+def test_write_cache_creates_parent_dirs(tmp_path: Path) -> None:
+    """_write_cache() creates missing parent directories."""
+    cache_path = tmp_path / TEST_SUBDIR_NAME / TEST_CACHE_FILENAME
+    DnsResolver._write_cache(cache_path, [TEST_IP1])
+    assert cache_path.is_file()
 
-    def test_mixed_entries(self) -> None:
-        """Handle mix of domains and raw IPs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.dig_all.return_value = [TEST_IP2]
-            resolver = DnsResolver(runner=runner)
 
-            cache_path = Path(tmp) / "profile.allowed"
-            result = resolver.resolve_and_cache([TEST_IP1, TEST_DOMAIN], cache_path)
-            self.assertIn(TEST_IP1, result)
-            self.assertIn(TEST_IP2, result)
+def test_write_cache_empty_list(tmp_path: Path) -> None:
+    """_write_cache() writes an empty file for an empty IP list."""
+    cache_path = tmp_path / TEST_CACHE_FILENAME
+    DnsResolver._write_cache(cache_path, [])
+    assert cache_path.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "domains", "expected"),
+    [
+        pytest.param(
+            [[TEST_IP1, IPV6_CLOUDFLARE], [TEST_IP2]],
+            [CLOUDFLARE_DOMAIN, GOOGLE_DNS_DOMAIN],
+            [TEST_IP1, IPV6_CLOUDFLARE, TEST_IP2],
+            id="multiple-domains",
+        ),
+        pytest.param(
+            [[TEST_IP1], [TEST_IP1, TEST_IP2]],
+            [TEST_DOMAIN, TEST_DOMAIN2],
+            [TEST_IP1, TEST_IP2],
+            id="deduplicates",
+        ),
+    ],
+)
+def test_resolve_domains(
+    make_resolver: ResolverHarnessFactory,
+    side_effect: list[list[str]],
+    domains: list[str],
+    expected: list[str],
+) -> None:
+    """resolve_domains() merges results while preserving first-seen order."""
+    harness = make_resolver()
+    harness.runner.dig_all.side_effect = side_effect
+    assert harness.resolver.resolve_domains(domains) == expected
+
+
+def test_logs_warning_for_unresolvable(
+    make_resolver: ResolverHarnessFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """resolve_domains() logs a warning when a domain resolves to no IPs."""
+    harness = make_resolver()
+    harness.runner.dig_all.side_effect = [[TEST_IP1], []]
+
+    with caplog.at_level("WARNING", logger="terok_shield.dns"):
+        harness.resolver.resolve_domains([CLOUDFLARE_DOMAIN, NONEXISTENT_DOMAIN])
+
+    assert len(caplog.messages) == 1
+    assert NONEXISTENT_DOMAIN in caplog.messages[0]
+
+
+def test_resolve_domains_empty_input(make_resolver: ResolverHarnessFactory) -> None:
+    """resolve_domains() returns an empty list and skips DNS for empty input."""
+    harness = make_resolver()
+    assert harness.resolver.resolve_domains([]) == []
+    harness.runner.dig_all.assert_not_called()
+
+
+def test_resolve_and_cache_writes_cache(
+    tmp_path: Path,
+    make_resolver: ResolverHarnessFactory,
+) -> None:
+    """resolve_and_cache() resolves entries and writes the cache file."""
+    harness = make_resolver()
+    harness.runner.dig_all.return_value = [TEST_IP1]
+
+    cache_path = state.profile_allowed_path(tmp_path)
+    assert harness.resolver.resolve_and_cache([TEST_DOMAIN], cache_path) == [TEST_IP1]
+    assert cache_path.is_file()
+
+
+def test_resolve_and_cache_returns_fresh_cache(
+    tmp_path: Path,
+    make_resolver: ResolverHarnessFactory,
+) -> None:
+    """resolve_and_cache() returns fresh cached IPs without re-resolving DNS."""
+    harness = make_resolver()
+    cache_path = state.profile_allowed_path(tmp_path)
+    cache_path.write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
+
+    assert harness.resolver.resolve_and_cache([TEST_DOMAIN], cache_path, max_age=3600) == [
+        TEST_IP1,
+        TEST_IP2,
+    ]
+    harness.runner.dig_all.assert_not_called()
+
+
+def test_resolve_and_cache_re_resolves_stale_cache(
+    tmp_path: Path,
+    make_resolver: ResolverHarnessFactory,
+) -> None:
+    """resolve_and_cache() refreshes stale cache files."""
+    harness = make_resolver()
+    harness.runner.dig_all.return_value = [TEST_IP2]
+
+    cache_path = state.profile_allowed_path(tmp_path)
+    cache_path.write_text(f"{TEST_IP1}\n")
+    os.utime(cache_path, (0, 0))
+
+    assert harness.resolver.resolve_and_cache([TEST_DOMAIN], cache_path, max_age=3600) == [TEST_IP2]
+    harness.runner.dig_all.assert_called_once()
+
+
+def test_resolve_and_cache_mixed_entries(
+    tmp_path: Path,
+    make_resolver: ResolverHarnessFactory,
+) -> None:
+    """resolve_and_cache() preserves raw IPs while resolving domain entries."""
+    harness = make_resolver()
+    harness.runner.dig_all.return_value = [TEST_IP2]
+
+    cache_path = state.profile_allowed_path(tmp_path)
+    result = harness.resolver.resolve_and_cache([TEST_IP1, TEST_DOMAIN], cache_path)
+    assert TEST_IP1 in result
+    assert TEST_IP2 in result

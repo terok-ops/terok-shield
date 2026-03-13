@@ -3,25 +3,36 @@
 
 """Tests for the CLI entry point."""
 
-import io
+from __future__ import annotations
+
+import argparse
 import json
+import shutil
 import sys
-import tempfile
-import unittest
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from unittest import mock
+
+import pytest
 
 from terok_shield import ExecError, ShieldState
 from terok_shield.cli import (
     _auto_detect_mode,
     _build_config,
     _build_parser,
+    _load_config_file,
     _parse_loopback_ports,
+    _resolve_config_root,
+    _resolve_state_root,
     main,
 )
 from terok_shield.config import ShieldMode
 
 from ..testfs import (
+    AUDIT_FILENAME,
+    CONTAINERS_DIR_NAME,
     FAKE_CONFIG_DIR,
     FAKE_STATE_DIR,
     FAKE_STATE_DIR_STR,
@@ -35,1050 +46,878 @@ from ..testfs import (
     VOLUME_MOUNT_HOST,
 )
 from ..testnet import TEST_DOMAIN, TEST_IP1
-
-
-class TestBuildParser(unittest.TestCase):
-    """Test argument parser construction."""
-
-    def test_has_subcommands(self) -> None:
-        """Parser has all expected subcommands."""
-        parser = _build_parser()
-        # Parse known subcommands without error
-        for cmd in ["status", "rules", "logs", "down", "up", "preview", "profiles", "state"]:
-            if cmd in ("status", "logs", "preview", "profiles"):
-                ns = parser.parse_args([cmd])
-            else:
-                ns = parser.parse_args([cmd, "ctr"])
-            self.assertEqual(ns.command, cmd)
-
-    def test_prepare_requires_container(self) -> None:
-        """Prepare subcommand requires container arg."""
-        parser = _build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["prepare"])
-
-    def test_prepare_basic(self) -> None:
-        """Prepare subcommand parses container arg."""
-        parser = _build_parser()
-        ns = parser.parse_args(["prepare", "my-ctr"])
-        self.assertEqual(ns.command, "prepare")
-        self.assertEqual(ns.container, "my-ctr")
-        self.assertIsNone(ns.profiles)
-
-    def test_prepare_profiles(self) -> None:
-        """Prepare subcommand parses --profiles flag."""
-        parser = _build_parser()
-        ns = parser.parse_args(["prepare", "my-ctr", "--profiles", "base", "extra"])
-        self.assertEqual(ns.profiles, ["base", "extra"])
-
-    def test_run_requires_container(self) -> None:
-        """Run subcommand requires container arg."""
-        parser = _build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["run"])
-
-    def test_run_basic(self) -> None:
-        """Run subcommand parses container arg."""
-        parser = _build_parser()
-        ns = parser.parse_args(["run", "my-ctr"])
-        self.assertEqual(ns.command, "run")
-        self.assertEqual(ns.container, "my-ctr")
-
-    def test_run_profiles(self) -> None:
-        """Run subcommand parses --profiles flag."""
-        parser = _build_parser()
-        ns = parser.parse_args(["run", "my-ctr", "--profiles", "base"])
-        self.assertEqual(ns.profiles, ["base"])
-
-    def test_resolve_requires_container(self):
-        """Resolve subcommand requires container arg."""
-        parser = _build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["resolve"])
-
-    def test_allow_requires_args(self):
-        """Allow subcommand requires container and target."""
-        parser = _build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["allow"])
-
-    def test_deny_requires_args(self):
-        """Deny subcommand requires container and target."""
-        parser = _build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["deny"])
-
-    def test_logs_optional_container(self):
-        """Logs subcommand has optional --container."""
-        parser = _build_parser()
-        ns = parser.parse_args(["logs"])
-        self.assertIsNone(ns.container)
-        ns = parser.parse_args(["logs", "--container", "test"])
-        self.assertEqual(ns.container, "test")
-
-    def test_logs_optional_count(self):
-        """Logs subcommand has -n with default 50."""
-        parser = _build_parser()
-        ns = parser.parse_args(["logs"])
-        self.assertEqual(ns.n, 50)
-        ns = parser.parse_args(["logs", "-n", "10"])
-        self.assertEqual(ns.n, 10)
-
-    def test_down_requires_container(self) -> None:
-        """Down subcommand requires container arg."""
-        parser = _build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["down"])
-
-    def test_down_allow_all_flag(self) -> None:
-        """Down subcommand has --all flag defaulting to False."""
-        parser = _build_parser()
-        ns = parser.parse_args(["down", "ctr"])
-        self.assertFalse(ns.allow_all)
-        ns = parser.parse_args(["down", "ctr", "--all"])
-        self.assertTrue(ns.allow_all)
-
-    def test_up_requires_container(self) -> None:
-        """Up subcommand requires container arg."""
-        parser = _build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["up"])
-
-    def test_preview_defaults(self) -> None:
-        """Preview subcommand has --down defaulting to False."""
-        parser = _build_parser()
-        ns = parser.parse_args(["preview"])
-        self.assertFalse(ns.down)
-        self.assertFalse(ns.allow_all)
-
-    def test_preview_down_flag(self) -> None:
-        """Preview subcommand has --down flag."""
-        parser = _build_parser()
-        ns = parser.parse_args(["preview", "--down"])
-        self.assertTrue(ns.down)
-
-    def test_preview_down_all_flags(self) -> None:
-        """Preview subcommand has --down --all flags."""
-        parser = _build_parser()
-        ns = parser.parse_args(["preview", "--down", "--all"])
-        self.assertTrue(ns.down)
-        self.assertTrue(ns.allow_all)
-
-    def test_state_dir_flag(self) -> None:
-        """Parser has --state-dir global flag."""
-        parser = _build_parser()
-        ns = parser.parse_args(["--state-dir", FAKE_STATE_DIR_STR, "status"])
-        self.assertEqual(ns.state_dir, FAKE_STATE_DIR)
-
-
-class TestMainNoCommand(unittest.TestCase):
-    """Test CLI with no subcommand."""
-
-    def test_no_args_exits_zero(self):
-        """CLI with no args exits 0."""
-        with self.assertRaises(SystemExit) as ctx:
-            main([])
-        self.assertEqual(ctx.exception.code, 0)
-
-
-class TestMainHelp(unittest.TestCase):
-    """Test CLI help output."""
-
-    def test_help_exits_zero(self):
-        """CLI --help exits 0."""
-        with self.assertRaises(SystemExit) as ctx:
-            main(["--help"])
-        self.assertEqual(ctx.exception.code, 0)
-
-
-class TestMainDispatch(unittest.TestCase):
-    """Test CLI subcommand dispatch."""
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_status(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI status calls shield.status()."""
-        mock_cls.return_value.status.return_value = {
-            "mode": "hook",
-            "audit_enabled": True,
-            "profiles": ["dev-standard"],
-        }
-        main(["status"])
-        mock_cls.return_value.status.assert_called_once()
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_prepare(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI prepare calls shield.pre_start() and prints flags."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["prepare", "test"])
-        finally:
-            sys.stdout = sys.__stdout__
-        mock_cls.return_value.pre_start.assert_called_once_with("test", None)
-        output = captured.getvalue().strip()
-        self.assertIn("--annotation", output)
-        self.assertIn("--name", output)
-        self.assertIn("test", output)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_prepare_with_profiles(
-        self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock
-    ) -> None:
-        """CLI prepare --profiles passes profiles to pre_start."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["prepare", "test", "--profiles", "base", "extra"])
-        finally:
-            sys.stdout = sys.__stdout__
-        mock_cls.return_value.pre_start.assert_called_once_with("test", ["base", "extra"])
-
-    @mock.patch("os.execvp")
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run(
-        self,
-        mock_cfg: mock.MagicMock,
-        mock_cls: mock.MagicMock,
-        mock_exec: mock.MagicMock,
-    ) -> None:
-        """CLI run calls pre_start then execs podman."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        main(["run", "test", "--", "alpine:latest", "sh"])
-        mock_cls.return_value.pre_start.assert_called_once_with("test", None)
-        mock_exec.assert_called_once()
-        argv = mock_exec.call_args[0][1]
-        self.assertEqual(argv[0], "podman")
-        self.assertEqual(argv[1], "run")
-        self.assertIn("--name", argv)
-        self.assertIn("test", argv)
-        self.assertIn("alpine:latest", argv)
-        self.assertIn("sh", argv)
-
-    @mock.patch("os.execvp")
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run_with_profiles(
-        self,
-        mock_cfg: mock.MagicMock,
-        mock_cls: mock.MagicMock,
-        mock_exec: mock.MagicMock,
-    ) -> None:
-        """CLI run --profiles passes profiles to pre_start."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        # main() receives the full argv; it splits on '--' internally
-        main(["run", "test", "--profiles", "custom", "--", "alpine:latest"])
-        mock_cls.return_value.pre_start.assert_called_once_with("test", ["custom"])
-        mock_exec.assert_called_once()
-
-    @mock.patch("os.execvp")
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run_trailing_args_split(
-        self,
-        mock_cfg: mock.MagicMock,
-        mock_cls: mock.MagicMock,
-        mock_exec: mock.MagicMock,
-    ) -> None:
-        """CLI run splits argv on '--' and passes trailing args to podman."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        main(["run", "test", "--", "-v", VOLUME_MOUNT_HOST, "alpine:latest", "sh"])
-        argv = mock_exec.call_args[0][1]
-        self.assertIn("-v", argv)
-        self.assertIn(VOLUME_MOUNT_HOST, argv)
-        self.assertIn("alpine:latest", argv)
-        self.assertIn("sh", argv)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run_no_image_exits_1(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI run without image after '--' exits with code 1."""
-        with self.assertRaises(SystemExit) as ctx:
-            main(["run", "test", "--"])
-        self.assertEqual(ctx.exception.code, 1)
-        # pre_start must NOT be called when image is missing
-        mock_cls.return_value.pre_start.assert_not_called()
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run_no_separator_exits_1(
-        self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock
-    ) -> None:
-        """CLI run without '--' and no args exits with code 1."""
-        with self.assertRaises(SystemExit) as ctx:
-            main(["run", "test"])
-        self.assertEqual(ctx.exception.code, 1)
-        mock_cls.return_value.pre_start.assert_not_called()
-
-    def test_separator_on_non_run_exits_2(self) -> None:
-        """CLI rejects '--' separator on non-run subcommands."""
-        with self.assertRaises(SystemExit) as ctx:
-            main(["resolve", "test", "--", "junk"])
-        self.assertEqual(ctx.exception.code, 2)
-
-    def test_bare_separator_no_command_exits_2(self) -> None:
-        """CLI rejects bare '--' with no subcommand."""
-        with self.assertRaises(SystemExit) as ctx:
-            main(["--", "junk"])
-        self.assertEqual(ctx.exception.code, 2)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run_rejects_shield_managed_flags(
-        self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock
-    ) -> None:
-        """CLI run rejects flags that conflict with shield configuration."""
-        for flag in (
-            "--name",
-            "--network",
-            "--hooks-dir",
-            "--annotation",
-            "--cap-add",
-            "--cap-drop",
-            "--security-opt",
-        ):
-            with self.assertRaises(SystemExit) as ctx:
-                main(["run", "test", "--", flag, "val", "alpine:latest"])
-            self.assertEqual(ctx.exception.code, 1, f"{flag} should be rejected")
-            mock_cls.return_value.pre_start.assert_not_called()
-
-        # Equals-form (--flag=value) must also be rejected
-        for flag_eq in (
-            "--network=host",
-            "--name=other",
-            "--annotation=a=b",
-            "--hooks-dir=/tmp",
-            "--cap-add=NET_ADMIN",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges",
-        ):
-            with self.assertRaises(SystemExit) as ctx:
-                main(["run", "test", "--", flag_eq, "alpine:latest"])
-            self.assertEqual(ctx.exception.code, 1, f"{flag_eq} should be rejected")
-            mock_cls.return_value.pre_start.assert_not_called()
-
-    @mock.patch("os.execvp")
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run_allows_non_managed_flags(
-        self,
-        mock_cfg: mock.MagicMock,
-        mock_cls: mock.MagicMock,
-        mock_exec: mock.MagicMock,
-    ) -> None:
-        """CLI run passes through non-managed podman flags."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        main(["run", "test", "--", "-d", "-e", "FOO=bar", "alpine:latest"])
-        mock_exec.assert_called_once()
-        argv = mock_exec.call_args[0][1]
-        self.assertIn("-d", argv)
-        self.assertIn("-e", argv)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_prepare_json_output(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI prepare --json outputs a JSON array."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["prepare", "test", "--json"])
-        finally:
-            sys.stdout = sys.__stdout__
-        result = json.loads(captured.getvalue())
-        self.assertIsInstance(result, list)
-        self.assertIn("--annotation", result)
-        self.assertIn("--name", result)
-        self.assertIn("test", result)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_main_none_argv(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI main(None) reads from sys.argv."""
-        mock_cls.return_value.status.return_value = {
-            "mode": "hook",
-            "audit_enabled": True,
-            "profiles": ["dev-standard"],
-        }
-        with mock.patch("sys.argv", ["terok-shield", "status"]):
-            main(None)
-        mock_cls.return_value.status.assert_called_once()
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_resolve(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI resolve calls shield.resolve()."""
-        mock_cls.return_value.resolve.return_value = [TEST_IP1]
-        main(["resolve", "test"])
-        mock_cls.return_value.resolve.assert_called_once_with(force=False)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_resolve_force(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI resolve --force passes force=True."""
-        mock_cls.return_value.resolve.return_value = []
-        main(["resolve", "test", "--force"])
-        mock_cls.return_value.resolve.assert_called_once_with(force=True)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_allow(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI allow calls shield.allow()."""
-        mock_cls.return_value.allow.return_value = [TEST_IP1]
-        main(["allow", "test", TEST_IP1])
-        mock_cls.return_value.allow.assert_called_once_with("test", TEST_IP1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_deny(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI deny calls shield.deny()."""
-        mock_cls.return_value.deny.return_value = [TEST_IP1]
-        main(["deny", "test", TEST_IP1])
-        mock_cls.return_value.deny.assert_called_once_with("test", TEST_IP1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_rules(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI rules calls shield.state() and shield.rules()."""
-        mock_cls.return_value.state.return_value = ShieldState.UP
-        mock_cls.return_value.rules.return_value = "table inet terok_shield {}"
-        main(["rules", "test"])
-        mock_cls.return_value.rules.assert_called_once_with("test")
-        mock_cls.return_value.state.assert_called_once_with("test")
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_down(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI down calls shield.down()."""
-        main(["down", "test"])
-        mock_cls.return_value.down.assert_called_once_with("test", allow_all=False)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_down_all(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI down --all calls shield.down(allow_all=True)."""
-        main(["down", "test", "--all"])
-        mock_cls.return_value.down.assert_called_once_with("test", allow_all=True)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_up(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI up calls shield.up()."""
-        main(["up", "test"])
-        mock_cls.return_value.up.assert_called_once_with("test")
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_preview(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI preview calls shield.preview()."""
-        mock_cls.return_value.preview.return_value = "table inet terok_shield {}"
-        main(["preview"])
-        mock_cls.return_value.preview.assert_called_once_with(down=False, allow_all=False)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_preview_down(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI preview --down calls shield.preview(down=True)."""
-        mock_cls.return_value.preview.return_value = "bypass"
-        main(["preview", "--down"])
-        mock_cls.return_value.preview.assert_called_once_with(down=True, allow_all=False)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_preview_down_all(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI preview --down --all calls shield.preview with both flags."""
-        mock_cls.return_value.preview.return_value = "bypass"
-        main(["preview", "--down", "--all"])
-        mock_cls.return_value.preview.assert_called_once_with(down=True, allow_all=True)
-
-    def test_preview_all_without_down_exits_1(self) -> None:
-        """CLI preview --all without --down exits with code 1."""
-        with self.assertRaises(SystemExit) as ctx:
-            main(["preview", "--all"])
-        self.assertEqual(ctx.exception.code, 1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_profiles(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI profiles calls shield.profiles_list()."""
-        mock_cls.return_value.profiles_list.return_value = ["dev-standard", "dev-python"]
-        main(["profiles"])
-        mock_cls.return_value.profiles_list.assert_called_once()
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_state(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI state calls shield.state()."""
-        mock_cls.return_value.state.return_value = ShieldState.UP
-        main(["state", "test"])
-        mock_cls.return_value.state.assert_called_once_with("test")
-
-
-class TestMainOutputFormatting(unittest.TestCase):
-    """Test CLI output formatting for various subcommands."""
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_prepare_output_shell_safe(
-        self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock
-    ) -> None:
-        """CLI prepare output is shell-safe (values with spaces are quoted)."""
-        annotation_val = f"terok.shield.state_dir={STATE_DIR_WITH_SPACES}"
-        mock_cls.return_value.pre_start.return_value = [
-            "--annotation",
-            annotation_val,
-        ]
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["prepare", "test"])
-        finally:
-            sys.stdout = sys.__stdout__
-        output = captured.getvalue().strip()
-        # The path with spaces should be quoted
-        self.assertIn(f"'{annotation_val}'", output)
-
-    @mock.patch("os.execvp")
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_run_passes_user_podman_flags(
-        self,
-        mock_cfg: mock.MagicMock,
-        mock_cls: mock.MagicMock,
-        mock_exec: mock.MagicMock,
-    ) -> None:
-        """CLI run passes user flags (like -v, -p) through to podman."""
-        mock_cls.return_value.pre_start.return_value = ["--annotation", "a=b"]
-        main(["run", "test", "--", "-v", VOLUME_MOUNT_DATA, "-p", "8080:80", "alpine:latest"])
-        argv = mock_exec.call_args[0][1]
-        self.assertIn("-v", argv)
-        self.assertIn(VOLUME_MOUNT_DATA, argv)
-        self.assertIn("-p", argv)
-        self.assertIn("8080:80", argv)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_status_output_format(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI status prints formatted output."""
-        mock_cls.return_value.status.return_value = {
-            "mode": "hook",
-            "audit_enabled": True,
-            "profiles": ["dev-standard"],
-        }
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["status"])
-        finally:
-            sys.stdout = sys.__stdout__
-        output = captured.getvalue()
-        self.assertIn("Mode:", output)
-        self.assertIn("hook", output)
-        self.assertIn("Audit:", output)
-        self.assertIn("enabled", output)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_status_no_logs(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI status handles disabled audit."""
-        mock_cls.return_value.status.return_value = {
-            "mode": "hook",
-            "audit_enabled": False,
-            "profiles": [],
-        }
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["status"])
-        finally:
-            sys.stdout = sys.__stdout__
-        output = captured.getvalue()
-        self.assertIn("disabled", output)
-        self.assertIn("(none)", output)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_allow_no_ips_exits_1(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI allow exits 1 when no IPs are allowed."""
-        mock_cls.return_value.allow.return_value = []
-        with self.assertRaises(SystemExit) as ctx:
-            main(["allow", "test", TEST_DOMAIN])
-        self.assertEqual(ctx.exception.code, 1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_deny_no_ips_exits_1(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI deny exits 1 when no IPs are denied."""
-        mock_cls.return_value.deny.return_value = []
-        with self.assertRaises(SystemExit) as ctx:
-            main(["deny", "test", TEST_DOMAIN])
-        self.assertEqual(ctx.exception.code, 1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_rules_no_rules(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI rules prints 'No rules found' for empty output."""
-        mock_cls.return_value.state.return_value = ShieldState.INACTIVE
-        mock_cls.return_value.rules.return_value = ""
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["rules", "test"])
-        finally:
-            sys.stdout = sys.__stdout__
-        output = captured.getvalue()
-        self.assertIn("No rules found", output)
-
-    def test_logs_no_files(self) -> None:
-        """CLI logs prints 'No audit logs found' when no files."""
-        with tempfile.TemporaryDirectory() as tmp:
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                main(["--state-dir", tmp, "logs"])
-            finally:
-                sys.stdout = sys.__stdout__
-            output = captured.getvalue()
-            self.assertIn("No audit logs found", output)
-
-    def test_logs_with_container(self) -> None:
-        """CLI logs with --container prints entries from audit file."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ctr_dir = Path(tmp) / "containers" / "test"
-            ctr_dir.mkdir(parents=True)
-            audit_file = ctr_dir / "audit.jsonl"
-            audit_file.write_text('{"action":"setup","ts":"2026-01-01T00:00:00"}\n')
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                main(["--state-dir", tmp, "logs", "--container", "test"])
-            finally:
-                sys.stdout = sys.__stdout__
-            output = captured.getvalue().strip()
-            entry = json.loads(output)
-            self.assertEqual(entry["action"], "setup")
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_profiles_output(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI profiles lists each profile on its own line."""
-        mock_cls.return_value.profiles_list.return_value = ["dev-standard", "dev-python"]
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["profiles"])
-        finally:
-            sys.stdout = sys.__stdout__
-        lines = captured.getvalue().strip().splitlines()
-        self.assertEqual(lines, ["dev-standard", "dev-python"])
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_state_output(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """CLI state prints the state value."""
-        mock_cls.return_value.state.return_value = ShieldState.DOWN
-        captured = io.StringIO()
-        sys.stdout = captured
-        try:
-            main(["state", "test"])
-        finally:
-            sys.stdout = sys.__stdout__
-        self.assertEqual(captured.getvalue().strip(), "down")
-
-
-class TestMainErrorHandling(unittest.TestCase):
-    """Test CLI error handling."""
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_runtime_error_exits_1(
-        self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock
-    ) -> None:
-        """RuntimeError in dispatch exits with code 1."""
-        mock_cls.return_value.status.side_effect = RuntimeError("nope")
-        with self.assertRaises(SystemExit) as ctx:
-            main(["status"])
-        self.assertEqual(ctx.exception.code, 1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_value_error_exits_1(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """ValueError in dispatch exits with code 1."""
-        mock_cls.return_value.allow.side_effect = ValueError("bad ip")
-        with self.assertRaises(SystemExit) as ctx:
-            main(["allow", "test", "bad"])
-        self.assertEqual(ctx.exception.code, 1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_exec_error_exits_1(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """ExecError in dispatch exits with code 1."""
-        mock_cls.return_value.status.side_effect = ExecError(["nft", "list"], 1, "command failed")
-        with self.assertRaises(SystemExit) as ctx:
-            main(["status"])
-        self.assertEqual(ctx.exception.code, 1)
-
-    @mock.patch("terok_shield.cli.Shield")
-    @mock.patch("terok_shield.cli._build_config")
-    def test_os_error_exits_1(self, mock_cfg: mock.MagicMock, mock_cls: mock.MagicMock) -> None:
-        """OSError in dispatch exits with code 1."""
-        mock_cls.return_value.rules.side_effect = OSError("permission denied")
-        with self.assertRaises(SystemExit) as ctx:
-            main(["rules", "test"])
-        self.assertEqual(ctx.exception.code, 1)
-
-
-class TestResolveStateRoot(unittest.TestCase):
-    """Tests for _resolve_state_root (moved from config.py)."""
-
-    def test_default(self) -> None:
-        """Default state root is under ~/.local/state/."""
-        from terok_shield.cli import _resolve_state_root
-
-        with mock.patch.dict("os.environ", {}, clear=True):
-            root = _resolve_state_root()
-            self.assertTrue(str(root).endswith("terok-shield"))
-
-    def test_env_override(self) -> None:
-        """TEROK_SHIELD_STATE_DIR overrides default."""
-        from terok_shield.cli import _resolve_state_root
-
-        with mock.patch.dict("os.environ", {"TEROK_SHIELD_STATE_DIR": str(FAKE_STATE_DIR)}):
-            root = _resolve_state_root()
-            self.assertEqual(root, FAKE_STATE_DIR)
-
-    def test_xdg(self) -> None:
-        """XDG_STATE_HOME is used when TEROK_SHIELD_STATE_DIR is not set."""
-        from terok_shield.cli import _resolve_state_root
-
-        with mock.patch.dict(
-            "os.environ", {"XDG_STATE_HOME": str(FAKE_XDG_STATE_HOME)}, clear=True
-        ):
-            root = _resolve_state_root()
-            self.assertEqual(root, FAKE_XDG_STATE_HOME / "terok-shield")
-
-    def test_explicit_overrides_xdg(self) -> None:
-        """TEROK_SHIELD_STATE_DIR takes priority over XDG_STATE_HOME."""
-        from terok_shield.cli import _resolve_state_root
-
-        with mock.patch.dict(
-            "os.environ",
+from .helpers import write_jsonl
+
+_CONTAINER = "test"
+_IMAGE = "alpine:latest"
+
+
+@dataclass
+class CliDispatchHarness:
+    """Patched CLI collaborators for commands that construct a Shield."""
+
+    build_config: mock.MagicMock
+    shield_cls: mock.MagicMock
+
+    @property
+    def shield(self) -> mock.MagicMock:
+        """Return the Shield instance that main() will use."""
+        return self.shield_cls.return_value
+
+
+@dataclass
+class CliRunHarness(CliDispatchHarness):
+    """Patched CLI collaborators for the ``run`` subcommand."""
+
+    execvp: mock.MagicMock
+
+
+@pytest.fixture
+def parser() -> argparse.ArgumentParser:
+    """Return a fresh CLI parser."""
+    return _build_parser()
+
+
+@pytest.fixture
+def cli_dispatch() -> Iterator[CliDispatchHarness]:
+    """Patch CLI config construction and Shield wiring."""
+    with (
+        mock.patch("terok_shield.cli._build_config") as build_config,
+        mock.patch("terok_shield.cli.Shield") as shield_cls,
+    ):
+        yield CliDispatchHarness(build_config=build_config, shield_cls=shield_cls)
+
+
+@pytest.fixture
+def cli_run() -> Iterator[CliRunHarness]:
+    """Patch CLI collaborators plus ``os.execvp`` for ``run`` tests."""
+    with (
+        mock.patch("terok_shield.cli._build_config") as build_config,
+        mock.patch("terok_shield.cli.Shield") as shield_cls,
+        mock.patch("os.execvp") as execvp,
+    ):
+        yield CliRunHarness(build_config=build_config, shield_cls=shield_cls, execvp=execvp)
+
+
+def _write_audit_entries(state_root: Path, container: str, entries: list[dict[str, str]]) -> Path:
+    """Write JSONL audit entries for a specific container."""
+    return write_jsonl(state_root / CONTAINERS_DIR_NAME / container / AUDIT_FILENAME, entries)
+
+
+def _set_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cleared_keys: tuple[str, ...],
+    env: dict[str, str],
+) -> None:
+    """Clear selected environment keys, then apply test overrides."""
+    for key in cleared_keys:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
+@pytest.fixture
+def force_hook_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force CLI config building to use hook mode without autodetection."""
+    monkeypatch.setattr("terok_shield.cli._auto_detect_mode", lambda: ShieldMode.HOOK)
+
+
+@pytest.mark.parametrize(
+    ("args", "command"),
+    [
+        pytest.param(["status"], "status", id="status"),
+        pytest.param(["rules", _CONTAINER], "rules", id="rules"),
+        pytest.param(["logs"], "logs", id="logs"),
+        pytest.param(["down", _CONTAINER], "down", id="down"),
+        pytest.param(["up", _CONTAINER], "up", id="up"),
+        pytest.param(["preview"], "preview", id="preview"),
+        pytest.param(["profiles"], "profiles", id="profiles"),
+        pytest.param(["state", _CONTAINER], "state", id="state"),
+    ],
+)
+def test_parser_recognizes_subcommands(
+    parser: argparse.ArgumentParser,
+    args: list[str],
+    command: str,
+) -> None:
+    """The parser accepts each registered subcommand."""
+    assert parser.parse_args(args).command == command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("prepare", id="prepare"),
+        pytest.param("run", id="run"),
+        pytest.param("resolve", id="resolve"),
+        pytest.param("down", id="down"),
+        pytest.param("up", id="up"),
+    ],
+)
+def test_parser_requires_container(parser: argparse.ArgumentParser, command: str) -> None:
+    """Container-oriented subcommands reject missing container arguments."""
+    with pytest.raises(SystemExit):
+        parser.parse_args([command])
+
+
+@pytest.mark.parametrize(
+    "command", [pytest.param("allow", id="allow"), pytest.param("deny", id="deny")]
+)
+def test_parser_requires_container_and_target(
+    parser: argparse.ArgumentParser,
+    command: str,
+) -> None:
+    """allow/deny require both the container and the target argument."""
+    with pytest.raises(SystemExit):
+        parser.parse_args([command])
+
+
+def test_prepare_parser_supports_profiles(parser: argparse.ArgumentParser) -> None:
+    """prepare accepts a positional container plus profile overrides."""
+    parsed = parser.parse_args(["prepare", "my-ctr", "--profiles", "base", "extra"])
+    assert parsed.command == "prepare"
+    assert parsed.container == "my-ctr"
+    assert parsed.profiles == ["base", "extra"]
+
+
+def test_run_parser_supports_profiles(parser: argparse.ArgumentParser) -> None:
+    """run accepts a positional container plus profile overrides."""
+    parsed = parser.parse_args(["run", "my-ctr", "--profiles", "base"])
+    assert parsed.command == "run"
+    assert parsed.container == "my-ctr"
+    assert parsed.profiles == ["base"]
+
+
+def test_logs_parser_supports_optional_container_and_count(parser: argparse.ArgumentParser) -> None:
+    """logs accepts optional filtering and count flags."""
+    default_args = parser.parse_args(["logs"])
+    filtered_args = parser.parse_args(["logs", "--container", _CONTAINER, "-n", "10"])
+    assert default_args.container is None
+    assert default_args.n == 50
+    assert filtered_args.container == _CONTAINER
+    assert filtered_args.n == 10
+
+
+def test_down_parser_supports_allow_all(parser: argparse.ArgumentParser) -> None:
+    """down defaults to allow_all=False and flips with --all."""
+    assert not parser.parse_args(["down", "ctr"]).allow_all
+    assert parser.parse_args(["down", "ctr", "--all"]).allow_all
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_down", "expected_allow_all"),
+    [
+        pytest.param(["preview"], False, False, id="defaults"),
+        pytest.param(["preview", "--down"], True, False, id="down"),
+        pytest.param(["preview", "--down", "--all"], True, True, id="down-all"),
+    ],
+)
+def test_preview_parser_supports_flags(
+    parser: argparse.ArgumentParser,
+    args: list[str],
+    expected_down: bool,
+    expected_allow_all: bool,
+) -> None:
+    """preview parses down/all flags without custom post-processing."""
+    parsed = parser.parse_args(args)
+    assert parsed.down is expected_down
+    assert parsed.allow_all is expected_allow_all
+
+
+def test_parser_supports_state_dir_flag(parser: argparse.ArgumentParser) -> None:
+    """The global --state-dir option is available to all commands."""
+    parsed = parser.parse_args(["--state-dir", FAKE_STATE_DIR_STR, "status"])
+    assert parsed.state_dir == FAKE_STATE_DIR
+
+
+@pytest.mark.parametrize(
+    "argv", [pytest.param([], id="no-command"), pytest.param(["--help"], id="help")]
+)
+def test_main_help_paths_exit_zero(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    """main() prints help and exits 0 for help-style invocations."""
+    with pytest.raises(SystemExit) as ctx:
+        main(argv)
+    assert ctx.value.code == 0
+    assert "terok-shield" in capsys.readouterr().out
+
+
+def test_main_status_dispatches_to_shield(cli_dispatch: CliDispatchHarness) -> None:
+    """status constructs a Shield and calls shield.status()."""
+    cli_dispatch.shield.status.return_value = {
+        "mode": "hook",
+        "audit_enabled": True,
+        "profiles": ["dev-standard"],
+    }
+    main(["status"])
+    cli_dispatch.shield.status.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("argv", "profiles"),
+    [
+        pytest.param(["prepare", _CONTAINER], None, id="default-profiles"),
+        pytest.param(
+            ["prepare", _CONTAINER, "--profiles", "base", "extra"],
+            ["base", "extra"],
+            id="explicit-profiles",
+        ),
+    ],
+)
+def test_prepare_dispatches_and_prints_flags(
+    cli_dispatch: CliDispatchHarness,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    profiles: list[str] | None,
+) -> None:
+    """prepare delegates to pre_start() and prints the podman flags."""
+    cli_dispatch.shield.pre_start.return_value = ["--annotation", "a=b"]
+    main(argv)
+    cli_dispatch.shield.pre_start.assert_called_once_with(_CONTAINER, profiles)
+    output = capsys.readouterr().out.strip()
+    assert "--annotation" in output
+    assert "--name" in output
+    assert _CONTAINER in output
+
+
+def test_prepare_json_output(
+    cli_dispatch: CliDispatchHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """prepare --json emits a JSON array instead of shell-quoted args."""
+    cli_dispatch.shield.pre_start.return_value = ["--annotation", "a=b"]
+    main(["prepare", _CONTAINER, "--json"])
+    output = json.loads(capsys.readouterr().out)
+    assert output == ["--annotation", "a=b", "--name", _CONTAINER]
+
+
+def test_prepare_output_is_shell_safe(
+    cli_dispatch: CliDispatchHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """prepare quotes annotations that contain spaces."""
+    annotation = f"terok.shield.state_dir={STATE_DIR_WITH_SPACES}"
+    cli_dispatch.shield.pre_start.return_value = ["--annotation", annotation]
+    main(["prepare", _CONTAINER])
+    assert f"'{annotation}'" in capsys.readouterr().out.strip()
+
+
+@pytest.mark.parametrize(
+    ("argv", "profiles", "expected_tail"),
+    [
+        pytest.param(
+            ["run", _CONTAINER, "--", _IMAGE, "sh"],
+            None,
+            [_IMAGE, "sh"],
+            id="basic-run",
+        ),
+        pytest.param(
+            ["run", _CONTAINER, "--profiles", "custom", "--", _IMAGE],
+            ["custom"],
+            [_IMAGE],
+            id="run-with-profiles",
+        ),
+        pytest.param(
+            ["run", _CONTAINER, "--", "-v", VOLUME_MOUNT_HOST, _IMAGE, "sh"],
+            None,
+            ["-v", VOLUME_MOUNT_HOST, _IMAGE, "sh"],
+            id="split-trailing-args",
+        ),
+        pytest.param(
+            ["run", _CONTAINER, "--", "-d", "-e", "FOO=bar", _IMAGE],
+            None,
+            ["-d", "-e", "FOO=bar", _IMAGE],
+            id="non-managed-flags-pass-through",
+        ),
+        pytest.param(
+            ["run", _CONTAINER, "--", "-v", VOLUME_MOUNT_DATA, "-p", "8080:80", _IMAGE],
+            None,
+            ["-v", VOLUME_MOUNT_DATA, "-p", "8080:80", _IMAGE],
+            id="user-podman-flags",
+        ),
+    ],
+)
+def test_run_execs_podman_with_shield_flags(
+    cli_run: CliRunHarness,
+    argv: list[str],
+    profiles: list[str] | None,
+    expected_tail: list[str],
+) -> None:
+    """run() validates args, calls pre_start(), and execs podman run."""
+    cli_run.shield.pre_start.return_value = ["--annotation", "a=b"]
+    main(argv)
+    cli_run.shield.pre_start.assert_called_once_with(_CONTAINER, profiles)
+    cli_run.execvp.assert_called_once()
+    podman_argv = cli_run.execvp.call_args.args[1]
+    assert podman_argv[:3] == ["podman", "run", "--name"]
+    assert _CONTAINER in podman_argv
+    for item in expected_tail:
+        assert item in podman_argv
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_code"),
+    [
+        pytest.param(["run", _CONTAINER, "--"], 1, id="no-image-after-separator"),
+        pytest.param(["run", _CONTAINER], 1, id="no-separator-or-image"),
+        pytest.param(["resolve", _CONTAINER, "--", "junk"], 2, id="separator-on-non-run"),
+        pytest.param(["--", "junk"], 2, id="bare-separator"),
+    ],
+)
+def test_run_and_separator_validation(
+    cli_dispatch: CliDispatchHarness,
+    argv: list[str],
+    expected_code: int,
+) -> None:
+    """main() rejects malformed run invocations and misplaced separators."""
+    with pytest.raises(SystemExit) as ctx:
+        main(argv)
+    assert ctx.value.code == expected_code
+    cli_dispatch.shield.pre_start.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        pytest.param("--name", id="name"),
+        pytest.param("--network", id="network"),
+        pytest.param("--hooks-dir", id="hooks-dir"),
+        pytest.param("--annotation", id="annotation"),
+        pytest.param("--cap-add", id="cap-add"),
+        pytest.param("--cap-drop", id="cap-drop"),
+        pytest.param("--security-opt", id="security-opt"),
+        pytest.param("--network=host", id="network-equals"),
+        pytest.param("--name=other", id="name-equals"),
+        pytest.param("--annotation=a=b", id="annotation-equals"),
+        pytest.param("--hooks-dir=/tmp", id="hooks-dir-equals"),
+        pytest.param("--cap-add=NET_ADMIN", id="cap-add-equals"),
+        pytest.param("--cap-drop=ALL", id="cap-drop-equals"),
+        pytest.param("--security-opt=no-new-privileges", id="security-opt-equals"),
+    ],
+)
+def test_run_rejects_shield_managed_flags(
+    cli_dispatch: CliDispatchHarness,
+    flag: str,
+) -> None:
+    """run() rejects podman flags that terok-shield manages itself."""
+    args = ["run", _CONTAINER, "--", flag, _IMAGE]
+    if "=" not in flag:
+        args.insert(-1, "val")
+    with pytest.raises(SystemExit) as ctx:
+        main(args)
+    assert ctx.value.code == 1
+    cli_dispatch.shield.pre_start.assert_not_called()
+
+
+def test_main_uses_sys_argv_when_argv_is_none(cli_dispatch: CliDispatchHarness) -> None:
+    """main(None) falls back to sys.argv[1:]."""
+    cli_dispatch.shield.status.return_value = {
+        "mode": "hook",
+        "audit_enabled": True,
+        "profiles": ["dev-standard"],
+    }
+    with mock.patch.object(sys, "argv", ["terok-shield", "status"]):
+        main(None)
+    cli_dispatch.shield.status.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("argv", "force"),
+    [
+        pytest.param(["resolve", _CONTAINER], False, id="default"),
+        pytest.param(["resolve", _CONTAINER, "--force"], True, id="force"),
+    ],
+)
+def test_resolve_dispatches_force_flag(
+    cli_dispatch: CliDispatchHarness,
+    argv: list[str],
+    force: bool,
+) -> None:
+    """resolve delegates to shield.resolve() with the parsed force flag."""
+    cli_dispatch.shield.resolve.return_value = [TEST_IP1]
+    main(argv)
+    cli_dispatch.shield.resolve.assert_called_once_with(force=force)
+
+
+@pytest.mark.parametrize(
+    ("command", "method_name"),
+    [
+        pytest.param("allow", "allow", id="allow"),
+        pytest.param("deny", "deny", id="deny"),
+    ],
+)
+def test_allow_and_deny_dispatch_to_shield(
+    cli_dispatch: CliDispatchHarness,
+    command: str,
+    method_name: str,
+) -> None:
+    """allow/deny dispatch to the corresponding facade methods."""
+    getattr(cli_dispatch.shield, method_name).return_value = [TEST_IP1]
+    main([command, _CONTAINER, TEST_IP1])
+    getattr(cli_dispatch.shield, method_name).assert_called_once_with(_CONTAINER, TEST_IP1)
+
+
+@pytest.mark.parametrize(
+    ("argv", "method_name", "expected_call"),
+    [
+        pytest.param(
+            ["down", _CONTAINER], "down", mock.call(_CONTAINER, allow_all=False), id="down"
+        ),
+        pytest.param(
+            ["down", _CONTAINER, "--all"],
+            "down",
+            mock.call(_CONTAINER, allow_all=True),
+            id="down-all",
+        ),
+        pytest.param(["up", _CONTAINER], "up", mock.call(_CONTAINER), id="up"),
+        pytest.param(
+            ["preview"],
+            "preview",
+            mock.call(down=False, allow_all=False),
+            id="preview-default",
+        ),
+        pytest.param(
+            ["preview", "--down"],
+            "preview",
+            mock.call(down=True, allow_all=False),
+            id="preview-down",
+        ),
+        pytest.param(
+            ["preview", "--down", "--all"],
+            "preview",
+            mock.call(down=True, allow_all=True),
+            id="preview-down-all",
+        ),
+        pytest.param(["profiles"], "profiles_list", mock.call(), id="profiles"),
+        pytest.param(["state", _CONTAINER], "state", mock.call(_CONTAINER), id="state"),
+    ],
+)
+def test_misc_dispatch_paths(
+    cli_dispatch: CliDispatchHarness,
+    argv: list[str],
+    method_name: str,
+    expected_call: Any,
+) -> None:
+    """Simple CLI subcommands dispatch to the expected Shield methods."""
+    if method_name == "preview":
+        cli_dispatch.shield.preview.return_value = "table inet terok_shield {}"
+    elif method_name == "state":
+        cli_dispatch.shield.state.return_value = ShieldState.UP
+    elif method_name == "profiles_list":
+        cli_dispatch.shield.profiles_list.return_value = ["dev-standard", "dev-python"]
+
+    main(argv)
+
+    dispatched = getattr(cli_dispatch.shield, method_name)
+    assert dispatched.call_count == 1
+    assert dispatched.call_args == expected_call
+
+
+def test_rules_dispatches_to_state_and_rules(cli_dispatch: CliDispatchHarness) -> None:
+    """rules shows state first and then the rendered nft ruleset."""
+    cli_dispatch.shield.state.return_value = ShieldState.UP
+    cli_dispatch.shield.rules.return_value = "table inet terok_shield {}"
+    main(["rules", _CONTAINER])
+    cli_dispatch.shield.state.assert_called_once_with(_CONTAINER)
+    cli_dispatch.shield.rules.assert_called_once_with(_CONTAINER)
+
+
+def test_preview_requires_down_for_all() -> None:
+    """preview --all without --down exits 1."""
+    with pytest.raises(SystemExit) as ctx:
+        main(["preview", "--all"])
+    assert ctx.value.code == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_substrings"),
+    [
+        pytest.param(
+            {"mode": "hook", "audit_enabled": True, "profiles": ["dev-standard"]},
+            ["Mode:", "hook", "Audit:", "enabled"],
+            id="audit-enabled",
+        ),
+        pytest.param(
+            {"mode": "hook", "audit_enabled": False, "profiles": []},
+            ["disabled", "(none)"],
+            id="audit-disabled-no-profiles",
+        ),
+    ],
+)
+def test_status_output_formatting(
+    cli_dispatch: CliDispatchHarness,
+    capsys: pytest.CaptureFixture[str],
+    status: dict[str, object],
+    expected_substrings: list[str],
+) -> None:
+    """status output is human-readable for both enabled and disabled audit."""
+    cli_dispatch.shield.status.return_value = status
+    main(["status"])
+    output = capsys.readouterr().out
+    for text in expected_substrings:
+        assert text in output
+
+
+@pytest.mark.parametrize(
+    ("command", "method_name"),
+    [
+        pytest.param("allow", "allow", id="allow"),
+        pytest.param("deny", "deny", id="deny"),
+    ],
+)
+def test_allow_and_deny_exit_1_when_nothing_changes(
+    cli_dispatch: CliDispatchHarness,
+    command: str,
+    method_name: str,
+) -> None:
+    """allow/deny fail with exit code 1 when no IPs are changed."""
+    getattr(cli_dispatch.shield, method_name).return_value = []
+    with pytest.raises(SystemExit) as ctx:
+        main([command, _CONTAINER, TEST_DOMAIN])
+    assert ctx.value.code == 1
+
+
+def test_rules_output_for_missing_rules(
+    cli_dispatch: CliDispatchHarness,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """rules prints a friendly message when the ruleset is empty."""
+    cli_dispatch.shield.state.return_value = ShieldState.INACTIVE
+    cli_dispatch.shield.rules.return_value = ""
+    main(["rules", _CONTAINER])
+    assert "No rules found" in capsys.readouterr().out
+
+
+def test_logs_without_files_reports_empty(
+    state_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """logs reports when no audit files exist in the state root."""
+    main(["--state-dir", str(state_root), "logs"])
+    assert "No audit logs found" in capsys.readouterr().out
+
+
+def test_logs_with_container_reads_single_audit_file(
+    state_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """logs --container reads and prints entries from one audit file."""
+    _write_audit_entries(
+        state_root,
+        _CONTAINER,
+        [{"action": "setup", "ts": "2026-01-01T00:00:00"}],
+    )
+    main(["--state-dir", str(state_root), "logs", "--container", _CONTAINER])
+    entry = json.loads(capsys.readouterr().out.strip())
+    assert entry["action"] == "setup"
+
+
+def test_logs_global_mode_merges_and_sorts(
+    state_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """logs without --container merges entries across containers by timestamp."""
+    _write_audit_entries(
+        state_root,
+        "ctr-a",
+        [
+            {"action": "a1", "ts": "2026-01-01T00:00:02"},
+            {"action": "a2", "ts": "2026-01-01T00:00:04"},
+        ],
+    )
+    _write_audit_entries(
+        state_root,
+        "ctr-b",
+        [
+            {"action": "b1", "ts": "2026-01-01T00:00:01"},
+            {"action": "b2", "ts": "2026-01-01T00:00:03"},
+        ],
+    )
+
+    main(["--state-dir", str(state_root), "logs", "-n", "3"])
+    actions = [json.loads(line)["action"] for line in capsys.readouterr().out.strip().splitlines()]
+    assert actions == ["a1", "b2", "a2"]
+
+
+def test_logs_global_mode_ignores_containers_without_audit_files(
+    state_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """logs reports no audit logs when container directories lack audit files."""
+    (state_root / CONTAINERS_DIR_NAME / "empty-ctr").mkdir(parents=True)
+    main(["--state-dir", str(state_root), "logs"])
+    assert "No audit logs found" in capsys.readouterr().out
+
+
+def test_logs_rejects_container_path_traversal(state_root: Path) -> None:
+    """logs validates the optional --container value."""
+    with pytest.raises(SystemExit) as ctx:
+        main(["--state-dir", str(state_root), "logs", "--container", FORBIDDEN_TRAVERSAL])
+    assert ctx.value.code == 1
+
+
+def test_profiles_output_lists_one_profile_per_line(
+    cli_dispatch: CliDispatchHarness,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """profiles prints one profile name per line."""
+    cli_dispatch.shield.profiles_list.return_value = ["dev-standard", "dev-python"]
+    main(["profiles"])
+    assert capsys.readouterr().out.strip().splitlines() == ["dev-standard", "dev-python"]
+
+
+def test_state_output_prints_state_value(
+    cli_dispatch: CliDispatchHarness,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """state prints the enum value, not the enum repr."""
+    cli_dispatch.shield.state.return_value = ShieldState.DOWN
+    main(["state", _CONTAINER])
+    assert capsys.readouterr().out.strip() == "down"
+
+
+@pytest.mark.parametrize(
+    ("argv", "method_name", "error"),
+    [
+        pytest.param(["status"], "status", RuntimeError("nope"), id="runtime-error"),
+        pytest.param(["allow", _CONTAINER, "bad"], "allow", ValueError("bad ip"), id="value-error"),
+        pytest.param(
+            ["status"],
+            "status",
+            ExecError(["nft", "list"], 1, "command failed"),
+            id="exec-error",
+        ),
+        pytest.param(["rules", _CONTAINER], "rules", OSError("permission denied"), id="os-error"),
+    ],
+)
+def test_main_dispatch_errors_exit_1(
+    cli_dispatch: CliDispatchHarness,
+    argv: list[str],
+    method_name: str,
+    error: Exception,
+) -> None:
+    """main() converts expected dispatch errors into exit code 1."""
+    getattr(cli_dispatch.shield, method_name).side_effect = error
+    with pytest.raises(SystemExit) as ctx:
+        main(argv)
+    assert ctx.value.code == 1
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        pytest.param({}, None, id="default"),
+        pytest.param(
+            {"TEROK_SHIELD_STATE_DIR": str(FAKE_STATE_DIR)}, FAKE_STATE_DIR, id="env-override"
+        ),
+        pytest.param(
+            {"XDG_STATE_HOME": str(FAKE_XDG_STATE_HOME)},
+            FAKE_XDG_STATE_HOME / "terok-shield",
+            id="xdg",
+        ),
+        pytest.param(
             {
                 "TEROK_SHIELD_STATE_DIR": str(FAKE_STATE_DIR),
                 "XDG_STATE_HOME": str(FAKE_XDG_STATE_HOME),
             },
-        ):
-            root = _resolve_state_root()
-            self.assertEqual(root, FAKE_STATE_DIR)
+            FAKE_STATE_DIR,
+            id="explicit-overrides-xdg",
+        ),
+    ],
+)
+def test_resolve_state_root(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], expected: Path | None
+) -> None:
+    """_resolve_state_root() honors explicit env vars before XDG defaults."""
+    _set_env(
+        monkeypatch,
+        cleared_keys=("TEROK_SHIELD_STATE_DIR", "XDG_STATE_HOME"),
+        env=env,
+    )
+    root = _resolve_state_root()
+    if expected is None:
+        assert str(root).endswith("terok-shield")
+    else:
+        assert root == expected
 
 
-class TestResolveConfigRoot(unittest.TestCase):
-    """Tests for _resolve_config_root (moved from config.py)."""
-
-    def test_default(self) -> None:
-        """Default config root is under ~/.config/."""
-        from terok_shield.cli import _resolve_config_root
-
-        with mock.patch.dict("os.environ", {}, clear=True):
-            root = _resolve_config_root()
-            self.assertTrue(str(root).endswith("terok-shield"))
-
-    def test_env_override(self) -> None:
-        """TEROK_SHIELD_CONFIG_DIR overrides default."""
-        from terok_shield.cli import _resolve_config_root
-
-        with mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": str(FAKE_CONFIG_DIR)}):
-            root = _resolve_config_root()
-            self.assertEqual(root, FAKE_CONFIG_DIR)
-
-    def test_xdg(self) -> None:
-        """XDG_CONFIG_HOME is used when TEROK_SHIELD_CONFIG_DIR is not set."""
-        from terok_shield.cli import _resolve_config_root
-
-        with mock.patch.dict(
-            "os.environ", {"XDG_CONFIG_HOME": str(FAKE_XDG_CONFIG_HOME)}, clear=True
-        ):
-            root = _resolve_config_root()
-            self.assertEqual(root, FAKE_XDG_CONFIG_HOME / "terok-shield")
-
-
-class TestParseLoopbackPorts(unittest.TestCase):
-    """Tests for _parse_loopback_ports (moved from config.py)."""
-
-    def test_valid_list(self) -> None:
-        """Valid port list is accepted."""
-        self.assertEqual(_parse_loopback_ports([8080, 9090]), (8080, 9090))
-
-    def test_single_int(self) -> None:
-        """A bare integer is accepted as a single-element tuple."""
-        self.assertEqual(_parse_loopback_ports(1234), (1234,))
-
-    def test_empty_list(self) -> None:
-        """Empty list produces empty tuple."""
-        self.assertEqual(_parse_loopback_ports([]), ())
-
-    def test_bool_rejected(self) -> None:
-        """Boolean values are silently dropped."""
-        self.assertEqual(_parse_loopback_ports([True]), ())
-
-    def test_out_of_range_dropped(self) -> None:
-        """Out-of-range ports are silently dropped."""
-        self.assertEqual(_parse_loopback_ports([99999]), ())
-
-    def test_mixed_valid_invalid(self) -> None:
-        """Valid ports kept, invalid silently dropped."""
-        self.assertEqual(_parse_loopback_ports([8080, 0, True, 9090]), (8080, 9090))
-
-    def test_bool_value_returns_empty(self) -> None:
-        """Bare boolean value returns empty tuple."""
-        self.assertEqual(_parse_loopback_ports(True), ())
-
-    def test_string_value_returns_empty(self) -> None:
-        """String value returns empty tuple."""
-        self.assertEqual(_parse_loopback_ports("not-a-list"), ())
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        pytest.param({}, None, id="default"),
+        pytest.param(
+            {"TEROK_SHIELD_CONFIG_DIR": str(FAKE_CONFIG_DIR)}, FAKE_CONFIG_DIR, id="env-override"
+        ),
+        pytest.param(
+            {"XDG_CONFIG_HOME": str(FAKE_XDG_CONFIG_HOME)},
+            FAKE_XDG_CONFIG_HOME / "terok-shield",
+            id="xdg",
+        ),
+    ],
+)
+def test_resolve_config_root(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], expected: Path | None
+) -> None:
+    """_resolve_config_root() honors explicit env vars before XDG defaults."""
+    _set_env(
+        monkeypatch,
+        cleared_keys=("TEROK_SHIELD_CONFIG_DIR", "XDG_CONFIG_HOME"),
+        env=env,
+    )
+    root = _resolve_config_root()
+    if expected is None:
+        assert str(root).endswith("terok-shield")
+    else:
+        assert root == expected
 
 
-class TestAutoDetectMode(unittest.TestCase):
-    """Tests for _auto_detect_mode (moved from config.py)."""
-
-    @mock.patch("shutil.which", return_value=None)
-    def test_no_tools_raises(self, _which: mock.Mock) -> None:
-        """Raise RuntimeError when nft is not available."""
-        with self.assertRaises(RuntimeError):
-            _auto_detect_mode()
-
-    @mock.patch("shutil.which", side_effect=lambda n: NFT_BINARY if n == "nft" else None)
-    def test_nft_returns_hook(self, _which: mock.Mock) -> None:
-        """Return HOOK when nft is available."""
-        self.assertEqual(_auto_detect_mode(), ShieldMode.HOOK)
-
-
-class TestLoadConfigFile(unittest.TestCase):
-    """Tests for _load_config_file edge cases."""
-
-    def test_malformed_yaml_returns_empty(self) -> None:
-        """Malformed YAML returns empty dict."""
-        from terok_shield.cli import _load_config_file
-
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text(": [invalid yaml\n  bad: {unclosed")
-            with mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}):
-                result = _load_config_file()
-                self.assertEqual(result, {})
-
-    def test_non_dict_yaml_returns_empty(self) -> None:
-        """YAML that parses to a non-dict returns empty dict."""
-        from terok_shield.cli import _load_config_file
-
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text("- just\n- a\n- list\n")
-            with mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}):
-                result = _load_config_file()
-                self.assertEqual(result, {})
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param([8080, 9090], (8080, 9090), id="valid-list"),
+        pytest.param(1234, (1234,), id="single-int"),
+        pytest.param([], (), id="empty-list"),
+        pytest.param([True], (), id="bool-dropped"),
+        pytest.param([99999], (), id="out-of-range-dropped"),
+        pytest.param([8080, 0, True, 9090], (8080, 9090), id="mixed-valid-invalid"),
+        pytest.param(True, (), id="bare-bool"),
+        pytest.param("not-a-list", (), id="string-input"),
+    ],
+)
+def test_parse_loopback_ports(raw: object, expected: tuple[int, ...]) -> None:
+    """_parse_loopback_ports() accepts ints/lists and silently drops invalid values."""
+    assert _parse_loopback_ports(raw) == expected
 
 
-class TestBuildConfig(unittest.TestCase):
-    """Tests for _build_config."""
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_missing_config_file_uses_defaults(self, _mock_mode: mock.Mock) -> None:
-        """Return defaults when config file does not exist."""
-        with (
-            mock.patch.dict(
-                "os.environ", {"TEROK_SHIELD_CONFIG_DIR": str(NONEXISTENT_DIR / "config")}
-            ),
-            tempfile.TemporaryDirectory() as tmp,
-        ):
-            config = _build_config("test-ctr", state_dir_override=Path(tmp))
-            self.assertEqual(config.mode, ShieldMode.HOOK)
-            self.assertEqual(config.state_dir, Path(tmp) / "containers" / "test-ctr")
-
-    def test_loads_yaml(self) -> None:
-        """Load configuration from YAML file."""
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text(
-                "mode: hook\n"
-                "default_profiles: [base, dev-python]\n"
-                "loopback_ports: [1234, 5678]\n"
-                "audit:\n"
-                "  enabled: false\n"
-            )
-            with (
-                mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}),
-                tempfile.TemporaryDirectory() as state_dir,
-            ):
-                config = _build_config("ctr", state_dir_override=Path(state_dir))
-                self.assertEqual(config.mode, ShieldMode.HOOK)
-                self.assertEqual(config.default_profiles, ("base", "dev-python"))
-                self.assertEqual(config.loopback_ports, (1234, 5678))
-                self.assertFalse(config.audit_enabled)
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_state_dir_override(self, _mock_mode: mock.Mock) -> None:
-        """--state-dir override is used as state root."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = _build_config("my-ctr", state_dir_override=Path(tmp))
-            self.assertEqual(config.state_dir, Path(tmp) / "containers" / "my-ctr")
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_default_container(self, _mock_mode: mock.Mock) -> None:
-        """No container uses _default subdirectory."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = _build_config(state_dir_override=Path(tmp))
-            self.assertEqual(config.state_dir, Path(tmp) / "containers" / "_default")
-
-    def test_unknown_mode_raises(self) -> None:
-        """Unknown mode string raises ValueError."""
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text("mode: bridge\n")
-            with (
-                mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}),
-                tempfile.TemporaryDirectory() as state_dir,
-            ):
-                with self.assertRaises(ValueError, msg="Unknown shield mode"):
-                    _build_config("ctr", state_dir_override=Path(state_dir))
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_non_list_profiles_uses_default(self, _mock_mode: mock.Mock) -> None:
-        """Non-list default_profiles falls back to dev-standard."""
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text("default_profiles: not-a-list\n")
-            with (
-                mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}),
-                tempfile.TemporaryDirectory() as state_dir,
-            ):
-                config = _build_config("ctr", state_dir_override=Path(state_dir))
-                self.assertEqual(config.default_profiles, ("dev-standard",))
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_non_dict_audit_section_uses_default(self, _mock_mode: mock.Mock) -> None:
-        """Non-dict audit section falls back to defaults."""
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text("audit: not-a-dict\n")
-            with (
-                mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}),
-                tempfile.TemporaryDirectory() as state_dir,
-            ):
-                config = _build_config("ctr", state_dir_override=Path(state_dir))
-                self.assertTrue(config.audit_enabled)
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_non_bool_audit_enabled_uses_default(self, _mock_mode: mock.Mock) -> None:
-        """Non-bool audit.enabled falls back to True."""
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text("audit:\n  enabled: yes-please\n")
-            with (
-                mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}),
-                tempfile.TemporaryDirectory() as state_dir,
-            ):
-                config = _build_config("ctr", state_dir_override=Path(state_dir))
-                self.assertTrue(config.audit_enabled)
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_traversal_container_name_rejected(self, _mock_mode: mock.Mock) -> None:
-        """Container name with path traversal is rejected."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(ValueError, msg="Unsafe container name"):
-                _build_config(FORBIDDEN_TRAVERSAL, state_dir_override=Path(tmp))
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_non_string_profiles_uses_default(self, _mock_mode: mock.Mock) -> None:
-        """Profile list with non-string entries falls back to default."""
-        with tempfile.TemporaryDirectory() as cfg_dir:
-            config_file = Path(cfg_dir) / "config.yml"
-            config_file.write_text("default_profiles: [1, null]\n")
-            with (
-                mock.patch.dict("os.environ", {"TEROK_SHIELD_CONFIG_DIR": cfg_dir}),
-                tempfile.TemporaryDirectory() as state_dir,
-            ):
-                config = _build_config("ctr", state_dir_override=Path(state_dir))
-                self.assertEqual(config.default_profiles, ("dev-standard",))
-
-    @mock.patch("terok_shield.cli._auto_detect_mode", return_value=ShieldMode.HOOK)
-    def test_no_state_dir_override_uses_resolve(self, _mock_mode: mock.Mock) -> None:
-        """Without --state-dir, _resolve_state_root is used."""
-        with (
-            mock.patch.dict(
-                "os.environ",
-                {
-                    "TEROK_SHIELD_STATE_DIR": str(FAKE_STATE_DIR),
-                    "TEROK_SHIELD_CONFIG_DIR": str(NONEXISTENT_DIR / "config"),
-                },
-            ),
-        ):
-            config = _build_config("ctr")
-            self.assertEqual(config.state_dir, FAKE_STATE_DIR / "containers" / "ctr")
+def test_auto_detect_mode_raises_without_nft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_auto_detect_mode() fails when nft is unavailable."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(RuntimeError):
+        _auto_detect_mode()
 
 
-class TestCmdLogsGlobal(unittest.TestCase):
-    """Tests for _cmd_logs multi-container merge/sort."""
+def test_auto_detect_mode_returns_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_auto_detect_mode() selects hook mode when nft is installed."""
+    monkeypatch.setattr(shutil, "which", lambda name: NFT_BINARY if name == "nft" else None)
+    assert _auto_detect_mode() == ShieldMode.HOOK
 
-    def test_global_logs_merges_and_sorts(self) -> None:
-        """Global logs merges entries across containers and sorts by timestamp."""
-        with tempfile.TemporaryDirectory() as tmp:
-            # Create two container audit logs with interleaved timestamps
-            for name, entries in [
-                (
-                    "ctr-a",
-                    [
-                        '{"action":"a1","ts":"2026-01-01T00:00:02"}',
-                        '{"action":"a2","ts":"2026-01-01T00:00:04"}',
-                    ],
-                ),
-                (
-                    "ctr-b",
-                    [
-                        '{"action":"b1","ts":"2026-01-01T00:00:01"}',
-                        '{"action":"b2","ts":"2026-01-01T00:00:03"}',
-                    ],
-                ),
-            ]:
-                ctr_dir = Path(tmp) / "containers" / name
-                ctr_dir.mkdir(parents=True)
-                (ctr_dir / "audit.jsonl").write_text("\n".join(entries) + "\n")
 
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                main(["--state-dir", tmp, "logs", "-n", "3"])
-            finally:
-                sys.stdout = sys.__stdout__
+@pytest.mark.parametrize(
+    "config_text",
+    [
+        pytest.param(": [invalid yaml\n  bad: {unclosed", id="malformed-yaml"),
+        pytest.param("- just\n- a\n- list\n", id="non-dict-yaml"),
+    ],
+)
+def test_load_config_file_returns_empty_for_invalid_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    config_root: Path,
+    config_text: str,
+) -> None:
+    """_load_config_file() returns an empty mapping for malformed or non-dict YAML."""
+    (config_root / "config.yml").write_text(config_text)
+    monkeypatch.setenv("TEROK_SHIELD_CONFIG_DIR", str(config_root))
+    assert _load_config_file() == {}
 
-            lines = captured.getvalue().strip().splitlines()
-            self.assertEqual(len(lines), 3)
-            actions = [json.loads(line)["action"] for line in lines]
-            # Last 3 sorted by timestamp: a1 (02), b2 (03), a2 (04)
-            self.assertEqual(actions, ["a1", "b2", "a2"])
 
-    def test_global_logs_empty_containers(self) -> None:
-        """Global logs prints 'No audit logs found' when containers exist but have no audit files."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ctr_dir = Path(tmp) / "containers" / "empty-ctr"
-            ctr_dir.mkdir(parents=True)
+def test_build_config_uses_defaults_when_config_file_is_missing(
+    force_hook_mode: None,
+) -> None:
+    """_build_config() falls back to defaults when config.yml is absent."""
+    config = _build_config("test-ctr", state_dir_override=NONEXISTENT_DIR)
+    assert config.mode == ShieldMode.HOOK
+    assert config.state_dir == NONEXISTENT_DIR.resolve() / "containers" / "test-ctr"
 
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                main(["--state-dir", tmp, "logs"])
-            finally:
-                sys.stdout = sys.__stdout__
-            self.assertIn("No audit logs found", captured.getvalue())
 
-    def test_logs_container_traversal_rejected(self) -> None:
-        """Container name with path traversal is rejected in logs command."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(SystemExit) as ctx:
-                main(["--state-dir", tmp, "logs", "--container", FORBIDDEN_TRAVERSAL])
-            self.assertEqual(ctx.exception.code, 1)
+def test_build_config_loads_yaml(
+    isolated_roots: tuple[Path, Path],
+    write_config: Callable[[str], Path],
+) -> None:
+    """_build_config() loads mode, profiles, ports, and audit settings from YAML."""
+    state_root, _ = isolated_roots
+    write_config(
+        "mode: hook\n"
+        "default_profiles: [base, dev-python]\n"
+        "loopback_ports: [1234, 5678]\n"
+        "audit:\n"
+        "  enabled: false\n"
+    )
+    config = _build_config("ctr", state_dir_override=state_root)
+    assert config.mode == ShieldMode.HOOK
+    assert config.default_profiles == ("base", "dev-python")
+    assert config.loopback_ports == (1234, 5678)
+    assert not config.audit_enabled
+
+
+def test_build_config_state_dir_override_and_default_container(
+    force_hook_mode: None,
+    state_root: Path,
+) -> None:
+    """_build_config() respects explicit state roots and default container names."""
+    assert (
+        _build_config("my-ctr", state_dir_override=state_root).state_dir
+        == state_root / "containers" / "my-ctr"
+    )
+    assert (
+        _build_config(state_dir_override=state_root).state_dir
+        == state_root / "containers" / "_default"
+    )
+
+
+def test_build_config_rejects_unknown_mode(
+    isolated_roots: tuple[Path, Path],
+    write_config: Callable[[str], Path],
+) -> None:
+    """_build_config() rejects unknown mode strings from config.yml."""
+    state_root, _ = isolated_roots
+    write_config("mode: bridge\n")
+    with pytest.raises(ValueError, match="Unknown shield mode"):
+        _build_config("ctr", state_dir_override=state_root)
+
+
+@pytest.mark.parametrize(
+    ("config_text", "expected_profiles", "expected_audit_enabled"),
+    [
+        pytest.param(
+            "default_profiles: not-a-list\n", ("dev-standard",), True, id="profiles-not-list"
+        ),
+        pytest.param(
+            "default_profiles: [1, null]\n", ("dev-standard",), True, id="profiles-not-strings"
+        ),
+        pytest.param("audit: not-a-dict\n", ("dev-standard",), True, id="audit-not-dict"),
+        pytest.param(
+            "audit:\n  enabled: yes-please\n", ("dev-standard",), True, id="audit-enabled-not-bool"
+        ),
+    ],
+)
+def test_build_config_falls_back_for_invalid_sections(
+    force_hook_mode: None,
+    isolated_roots: tuple[Path, Path],
+    write_config: Callable[[str], Path],
+    config_text: str,
+    expected_profiles: tuple[str, ...],
+    expected_audit_enabled: bool,
+) -> None:
+    """_build_config() falls back to safe defaults for invalid config sections."""
+    state_root, _ = isolated_roots
+    write_config(config_text)
+    config = _build_config("ctr", state_dir_override=state_root)
+    assert config.default_profiles == expected_profiles
+    assert config.audit_enabled is expected_audit_enabled
+
+
+def test_build_config_rejects_container_path_traversal(
+    force_hook_mode: None,
+    state_root: Path,
+) -> None:
+    """_build_config() validates container names before constructing state paths."""
+    with pytest.raises(ValueError):
+        _build_config(FORBIDDEN_TRAVERSAL, state_dir_override=state_root)
+
+
+def test_build_config_uses_resolved_state_root_when_not_overridden(
+    force_hook_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without --state-dir, _build_config() resolves the state root from the environment."""
+    monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", str(FAKE_STATE_DIR))
+    monkeypatch.setenv("TEROK_SHIELD_CONFIG_DIR", str(NONEXISTENT_DIR / "config"))
+    config = _build_config("ctr")
+    assert config.state_dir == FAKE_STATE_DIR / "containers" / "ctr"

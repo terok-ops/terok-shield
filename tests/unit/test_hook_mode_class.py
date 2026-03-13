@@ -4,527 +4,467 @@
 """Tests for the HookMode class."""
 
 import json
-import tempfile
-import unittest
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from terok_shield import state
-from terok_shield.config import ANNOTATION_KEY, ShieldConfig, ShieldState
+from terok_shield.config import (
+    ANNOTATION_AUDIT_ENABLED_KEY,
+    ANNOTATION_STATE_DIR_KEY,
+    ShieldConfig,
+    ShieldState,
+)
 from terok_shield.mode_hook import HookMode, install_hooks
 from terok_shield.nft import bypass_ruleset, hook_ruleset
 from terok_shield.run import ExecError
 
+from ..testfs import BIN_DIR_NAME, HOOK_ENTRYPOINT_NAME, HOOKS_DIR_NAME
 from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1, TEST_IP2
+from .helpers import write_lines
 
-_DISPOSABLE_DIRS: list[tempfile.TemporaryDirectory] = []
-"""Managed temp dirs for mock-only tests (cleaned up at process exit)."""
-
-
-def _make_hook_mode(
-    tmp_path: Path | None = None,
-    config: ShieldConfig | None = None,
-    *,
-    runner: mock.MagicMock | None = None,
-    audit: mock.MagicMock | None = None,
-    dns: mock.MagicMock | None = None,
-    profiles: mock.MagicMock | None = None,
-    ruleset: mock.MagicMock | None = None,
-) -> HookMode:
-    """Create a HookMode with mock collaborators."""
-    if config is None:
-        if tmp_path is None:
-            td = tempfile.TemporaryDirectory()
-            _DISPOSABLE_DIRS.append(td)
-            tmp_path = Path(td.name)
-        config = ShieldConfig(state_dir=tmp_path)
-    return HookMode(
-        config=config,
-        runner=runner or mock.MagicMock(),
-        audit=audit or mock.MagicMock(),
-        dns=dns or mock.MagicMock(),
-        profiles=profiles or mock.MagicMock(),
-        ruleset=ruleset or mock.MagicMock(),
-    )
+ConfigFactory = Callable[..., ShieldConfig]
 
 
-class TestHookModeInit(unittest.TestCase):
-    """Test HookMode construction."""
+@dataclass
+class HookModeHarness:
+    """A ``HookMode`` instance plus its config and mock collaborators."""
 
-    def test_stores_collaborators(self) -> None:
-        """HookMode stores all injected collaborators."""
-        runner = mock.MagicMock()
-        audit = mock.MagicMock()
-        dns = mock.MagicMock()
-        profiles = mock.MagicMock()
-        ruleset = mock.MagicMock()
-        with tempfile.TemporaryDirectory() as tmp:
-            config = ShieldConfig(state_dir=Path(tmp))
-            mode = HookMode(
+    mode: HookMode
+    config: ShieldConfig
+    runner: mock.MagicMock
+    audit: mock.MagicMock
+    dns: mock.MagicMock
+    profiles: mock.MagicMock
+    ruleset: mock.MagicMock
+
+
+HookModeHarnessFactory = Callable[..., HookModeHarness]
+
+
+@pytest.fixture
+def make_hook_mode(make_config: ConfigFactory) -> HookModeHarnessFactory:
+    """Create a ``HookMode`` with mock collaborators."""
+
+    def _make_hook_mode(
+        config: ShieldConfig | None = None,
+        *,
+        runner: mock.MagicMock | None = None,
+        audit: mock.MagicMock | None = None,
+        dns: mock.MagicMock | None = None,
+        profiles: mock.MagicMock | None = None,
+        ruleset: mock.MagicMock | None = None,
+    ) -> HookModeHarness:
+        config = config or make_config()
+        runner = runner or mock.MagicMock()
+        audit = audit or mock.MagicMock()
+        dns = dns or mock.MagicMock()
+        profiles = profiles or mock.MagicMock()
+        ruleset = ruleset or mock.MagicMock()
+        return HookModeHarness(
+            mode=HookMode(
                 config=config,
                 runner=runner,
                 audit=audit,
                 dns=dns,
                 profiles=profiles,
                 ruleset=ruleset,
-            )
-            self.assertIs(mode._config, config)
-            self.assertIs(mode._runner, runner)
-            self.assertIs(mode._audit, audit)
-            self.assertIs(mode._dns, dns)
-            self.assertIs(mode._profiles, profiles)
-            self.assertIs(mode._ruleset, ruleset)
-
-
-class TestHookModePreStart(unittest.TestCase):
-    """Test HookMode.pre_start()."""
-
-    @mock.patch("os.geteuid", return_value=1000)
-    def test_pasta_args(self, _euid) -> None:
-        """Pre-start returns pasta network args for rootless mode."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = ShieldConfig(state_dir=Path(tmp), loopback_ports=(8080,))
-            runner = mock.MagicMock()
-            runner.run.return_value = json.dumps({"host": {"rootlessNetworkCmd": "pasta"}})
-            profiles_mock = mock.MagicMock()
-            profiles_mock.compose_profiles.return_value = [TEST_DOMAIN]
-            dns = mock.MagicMock()
-            mode = _make_hook_mode(
-                config=config,
-                runner=runner,
-                profiles=profiles_mock,
-                dns=dns,
-            )
-            args = mode.pre_start("test", ["dev-standard"])
-            self.assertIn("--network", args)
-            net_idx = args.index("--network") + 1
-            self.assertIn("pasta:", args[net_idx])
-            self.assertIn("-T,8080", args[net_idx])
-
-    def test_installs_hooks(self) -> None:
-        """pre_start installs hooks and creates state dirs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = ShieldConfig(state_dir=Path(tmp))
-            profiles_mock = mock.MagicMock()
-            profiles_mock.compose_profiles.return_value = []
-            dns = mock.MagicMock()
-            mode = _make_hook_mode(config=config, profiles=profiles_mock, dns=dns)
-            with mock.patch("os.geteuid", return_value=0):
-                mode.pre_start("test", ["dev-standard"])
-            # Check hooks were installed
-            self.assertTrue(state.hooks_dir(Path(tmp)).is_dir())
-            self.assertTrue(state.hook_entrypoint(Path(tmp)).is_file())
-
-    def test_annotations_include_state_dir(self) -> None:
-        """pre_start includes state_dir annotation."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = ShieldConfig(state_dir=Path(tmp), loopback_ports=(1234,))
-            profiles_mock = mock.MagicMock()
-            profiles_mock.compose_profiles.return_value = []
-            dns = mock.MagicMock()
-            mode = _make_hook_mode(config=config, profiles=profiles_mock, dns=dns)
-            with mock.patch("os.geteuid", return_value=0):
-                args = mode.pre_start("test", ["dev-standard"])
-            # Find state_dir annotation
-            for i, arg in enumerate(args):
-                if arg == "--annotation" and "terok.shield.state_dir=" in args[i + 1]:
-                    self.assertIn(str(Path(tmp)), args[i + 1])
-                    break
-            else:
-                self.fail("state_dir annotation not found in args")
-
-    def test_annotations_include_audit_enabled(self) -> None:
-        """pre_start includes audit_enabled annotation."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = ShieldConfig(state_dir=Path(tmp), audit_enabled=False)
-            profiles_mock = mock.MagicMock()
-            profiles_mock.compose_profiles.return_value = []
-            dns = mock.MagicMock()
-            mode = _make_hook_mode(config=config, profiles=profiles_mock, dns=dns)
-            with mock.patch("os.geteuid", return_value=0):
-                args = mode.pre_start("test", ["dev-standard"])
-            # Find audit_enabled annotation
-            for i, arg in enumerate(args):
-                if arg == "--annotation" and "terok.shield.audit_enabled=" in args[i + 1]:
-                    self.assertIn("false", args[i + 1])
-                    break
-            else:
-                self.fail("audit_enabled annotation not found in args")
-
-
-class TestHookModeAllowDeny(unittest.TestCase):
-    """Test HookMode.allow_ip() and deny_ip()."""
-
-    def test_allow_ipv4(self) -> None:
-        """allow_ip adds element to allow_v4 set."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.allow_ip("test-ctr", TEST_IP1)
-            runner.nft_via_nsenter.assert_called_once()
-            call_args = runner.nft_via_nsenter.call_args[0]
-            self.assertIn("add", call_args)
-            self.assertIn("allow_v4", call_args)
-
-    def test_allow_persists_to_live_allowed(self) -> None:
-        """allow_ip persists IP to live.allowed file."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.allow_ip("test-ctr", TEST_IP1)
-            live_path = state.live_allowed_path(Path(tmp))
-            self.assertTrue(live_path.is_file())
-            self.assertIn(TEST_IP1, live_path.read_text())
-
-    def test_allow_deduplicates_live_allowed(self) -> None:
-        """allow_ip does not append duplicate entries to live.allowed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.allow_ip("test-ctr", TEST_IP1)
-            mode.allow_ip("test-ctr", TEST_IP1)
-            live_path = state.live_allowed_path(Path(tmp))
-            lines = [line for line in live_path.read_text().splitlines() if line.strip()]
-            self.assertEqual(lines.count(TEST_IP1), 1)
-
-    def test_allow_ipv6(self) -> None:
-        """allow_ip adds element to allow_v6 set for IPv6."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = IPV6_CLOUDFLARE
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.allow_ip("test-ctr", IPV6_CLOUDFLARE)
-            call_args = runner.nft_via_nsenter.call_args[0]
-            self.assertIn("allow_v6", call_args)
-
-    def test_deny_ipv4(self) -> None:
-        """deny_ip removes element from allow_v4 set."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.deny_ip("test-ctr", TEST_IP1)
-            call_args = runner.nft_via_nsenter.call_args[0]
-            self.assertIn("delete", call_args)
-            self.assertIn("allow_v4", call_args)
-
-    def test_deny_removes_from_live_allowed(self) -> None:
-        """deny_ip removes IP from live.allowed file."""
-        with tempfile.TemporaryDirectory() as tmp:
-            live_path = state.live_allowed_path(Path(tmp))
-            live_path.parent.mkdir(parents=True, exist_ok=True)
-            live_path.write_text(f"{TEST_IP1}\n")
-
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.deny_ip("test-ctr", TEST_IP1)
-            self.assertNotIn(TEST_IP1, live_path.read_text().splitlines())
-
-    def test_deny_profile_ip_writes_deny_list(self) -> None:
-        """deny_ip of a profile-sourced IP persists to deny.list."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n")
-
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.deny_ip("test-ctr", TEST_IP1)
-            deny_file = state.deny_path(Path(tmp))
-            self.assertTrue(deny_file.is_file())
-            self.assertIn(TEST_IP1, deny_file.read_text())
-
-    def test_deny_live_only_ip_no_deny_list(self) -> None:
-        """deny_ip of a live-only IP does NOT write deny.list."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.live_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n")
-
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.deny_ip("test-ctr", TEST_IP1)
-            deny_file = state.deny_path(Path(tmp))
-            self.assertFalse(deny_file.is_file())
-
-    def test_deny_nft_error_still_persists(self) -> None:
-        """nft delete element ExecError is caught; deny still persists to files."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n")
-            state.live_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n")
-
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "not in set")
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.deny_ip("test-ctr", TEST_IP1)
-            # live.allowed should still have IP removed
-            live_content = state.live_allowed_path(Path(tmp)).read_text()
-            self.assertNotIn(TEST_IP1, live_content.splitlines())
-            # deny.list should be written
-            self.assertIn(TEST_IP1, state.deny_path(Path(tmp)).read_text())
-
-    def test_allow_after_deny_clears_deny_list(self) -> None:
-        """allow_ip removes IP from deny.list (un-deny)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.deny_path(Path(tmp)).write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-
-            runner = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-            mode = _make_hook_mode(tmp_path=Path(tmp), runner=runner, ruleset=ruleset)
-
-            mode.allow_ip("test-ctr", TEST_IP1)
-            denied = state.read_denied_ips(Path(tmp))
-            self.assertNotIn(TEST_IP1, denied)
-            self.assertIn(TEST_IP2, denied)
-
-
-class TestHookModeListRules(unittest.TestCase):
-    """Test HookMode.list_rules()."""
-
-    def test_returns_output(self) -> None:
-        """list_rules returns nft output."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.return_value = "table inet terok_shield {}"
-        mode = _make_hook_mode(runner=runner)
-
-        result = mode.list_rules("test-ctr")
-        self.assertIn("terok_shield", result)
-
-    def test_returns_empty_on_exec_error(self) -> None:
-        """list_rules returns empty string on ExecError."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "error")
-        mode = _make_hook_mode(runner=runner)
-
-        result = mode.list_rules("test-ctr")
-        self.assertEqual(result, "")
-
-
-class TestHookModeShieldDown(unittest.TestCase):
-    """Test HookMode.shield_down()."""
-
-    def test_applies_bypass_ruleset(self) -> None:
-        """shield_down applies bypass ruleset and verifies."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.side_effect = ["", "valid output"]
-        ruleset = mock.MagicMock()
-        ruleset.build_bypass.return_value = "bypass ruleset"
-        ruleset.verify_bypass.return_value = []  # no errors
-        mode = _make_hook_mode(runner=runner, ruleset=ruleset)
-
-        mode.shield_down("test-ctr")
-        self.assertEqual(runner.nft_via_nsenter.call_count, 2)
-        ruleset.build_bypass.assert_called_once_with(allow_all=False)
-
-    def test_verification_failure_raises(self) -> None:
-        """shield_down raises RuntimeError on verification failure."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.side_effect = ["", "bad output"]
-        ruleset = mock.MagicMock()
-        ruleset.build_bypass.return_value = "bypass"
-        ruleset.verify_bypass.return_value = ["error: missing policy"]
-        mode = _make_hook_mode(runner=runner, ruleset=ruleset)
-
-        with self.assertRaises(RuntimeError) as ctx:
-            mode.shield_down("test-ctr")
-        self.assertIn("verification failed", str(ctx.exception))
-
-
-class TestHookModeShieldUp(unittest.TestCase):
-    """Test HookMode.shield_up()."""
-
-    def test_applies_hook_ruleset(self) -> None:
-        """shield_up applies hook ruleset and verifies."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ["", "valid output"]
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook ruleset"
-            ruleset.verify_hook.return_value = []
-            ruleset.add_elements_dual.return_value = ""
-            config = ShieldConfig(state_dir=Path(tmp))
-            mode = _make_hook_mode(config=config, runner=runner, ruleset=ruleset)
-            mode.shield_up("test-ctr")
-            self.assertEqual(runner.nft_via_nsenter.call_count, 2)
-
-    def test_readds_cached_ips(self) -> None:
-        """shield_up re-adds cached IPs from allowlist files."""
-        with tempfile.TemporaryDirectory() as tmp:
-            profile_path = state.profile_allowed_path(Path(tmp))
-            profile_path.write_text(f"{TEST_IP1}\n")
-
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ["", "", "valid output"]
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-            ruleset.verify_hook.return_value = []
-            ruleset.add_elements_dual.return_value = f"add element {TEST_IP1}"
-
-            config = ShieldConfig(state_dir=Path(tmp))
-            mode = _make_hook_mode(config=config, runner=runner, ruleset=ruleset)
-            mode.shield_up("test-ctr")
-            self.assertEqual(runner.nft_via_nsenter.call_count, 3)
-
-    def test_verification_failure_raises(self) -> None:
-        """shield_up raises RuntimeError on verification failure."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ["", "bad output"]
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-            ruleset.verify_hook.return_value = ["error"]
-            ruleset.add_elements_dual.return_value = ""
-
-            config = ShieldConfig(state_dir=Path(tmp))
-            mode = _make_hook_mode(config=config, runner=runner, ruleset=ruleset)
-            with self.assertRaises(RuntimeError):
-                mode.shield_up("test-ctr")
-
-
-class TestHookModeShieldState(unittest.TestCase):
-    """Test HookMode.shield_state()."""
-
-    def test_inactive_on_empty(self) -> None:
-        """Empty nft output means INACTIVE."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.return_value = ""
-        ruleset = mock.MagicMock()
-        mode = _make_hook_mode(runner=runner, ruleset=ruleset)
-        self.assertEqual(mode.shield_state("test"), ShieldState.INACTIVE)
-
-    def test_up_detected(self) -> None:
-        """Hook ruleset detected as UP."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.return_value = hook_ruleset()
-        ruleset = mock.MagicMock()
-        ruleset.verify_bypass.return_value = ["not bypass"]
-        ruleset.verify_hook.return_value = []  # passes hook verification
-        mode = _make_hook_mode(runner=runner, ruleset=ruleset)
-        self.assertEqual(mode.shield_state("test"), ShieldState.UP)
-
-    def test_down_detected(self) -> None:
-        """Bypass ruleset detected as DOWN."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.return_value = bypass_ruleset()
-        ruleset = mock.MagicMock()
-        ruleset.verify_bypass.return_value = []  # passes bypass verification
-        mode = _make_hook_mode(runner=runner, ruleset=ruleset)
-        self.assertEqual(mode.shield_state("test"), ShieldState.DOWN)
-
-    def test_error_detected(self) -> None:
-        """Unrecognised ruleset detected as ERROR."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.return_value = "random nft stuff"
-        ruleset = mock.MagicMock()
-        ruleset.verify_bypass.return_value = ["not bypass"]
-        ruleset.verify_hook.return_value = ["not hook"]
-        mode = _make_hook_mode(runner=runner, ruleset=ruleset)
-        self.assertEqual(mode.shield_state("test"), ShieldState.ERROR)
-
-
-class TestHookModePreview(unittest.TestCase):
-    """Test HookMode.preview()."""
-
-    def test_default_returns_hook(self) -> None:
-        """Default preview returns hook ruleset."""
-        ruleset = mock.MagicMock()
-        ruleset.build_hook.return_value = "hook ruleset"
-        mode = _make_hook_mode(ruleset=ruleset)
-
-        result = mode.preview()
-        ruleset.build_hook.assert_called_once()
-        self.assertEqual(result, "hook ruleset")
-
-    def test_down_returns_bypass(self) -> None:
-        """Preview with down=True returns bypass ruleset."""
-        ruleset = mock.MagicMock()
-        ruleset.build_bypass.return_value = "bypass ruleset"
-        mode = _make_hook_mode(ruleset=ruleset)
-
-        result = mode.preview(down=True, allow_all=True)
-        ruleset.build_bypass.assert_called_once_with(allow_all=True)
-        self.assertEqual(result, "bypass ruleset")
-
-
-class TestHookModeDetectNetwork(unittest.TestCase):
-    """Test HookMode._detect_rootless_network_mode()."""
-
-    def test_pasta_from_podman_info(self) -> None:
-        """Detect pasta mode from podman info output."""
-        runner = mock.MagicMock()
-        runner.run.return_value = json.dumps({"host": {"rootlessNetworkCmd": "pasta"}})
-        mode = _make_hook_mode(runner=runner)
-        self.assertEqual(mode._detect_rootless_network_mode(), "pasta")
-
-    def test_slirp4netns(self) -> None:
-        """Detect slirp4netns from podman info output."""
-        runner = mock.MagicMock()
-        runner.run.return_value = json.dumps({"host": {"rootlessNetworkCmd": "slirp4netns"}})
-        mode = _make_hook_mode(runner=runner)
-        self.assertEqual(mode._detect_rootless_network_mode(), "slirp4netns")
-
-    def test_fallback_on_empty(self) -> None:
-        """Default to pasta on empty output."""
-        runner = mock.MagicMock()
-        runner.run.return_value = ""
-        mode = _make_hook_mode(runner=runner)
-        self.assertEqual(mode._detect_rootless_network_mode(), "pasta")
-
-    def test_fallback_on_invalid_json(self) -> None:
-        """Default to pasta on invalid JSON."""
-        runner = mock.MagicMock()
-        runner.run.return_value = "not json"
-        mode = _make_hook_mode(runner=runner)
-        self.assertEqual(mode._detect_rootless_network_mode(), "pasta")
-
-
-class TestInstallHooks(unittest.TestCase):
-    """Test install_hooks() writes entrypoint and hook JSON files."""
-
-    def test_creates_entrypoint_and_hook_jsons(self) -> None:
-        """install_hooks creates executable entrypoint and both hook JSONs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            ep = base / "bin" / "terok-shield-hook"
-            hooks = base / "hooks"
-
-            install_hooks(hook_entrypoint=ep, hooks_dir=hooks)
-
-            # Entrypoint exists and is executable
-            self.assertTrue(ep.exists())
-            self.assertTrue(ep.stat().st_mode & 0o100)  # owner-execute bit
-            content = ep.read_text()
-            self.assertTrue(content.startswith("#!/bin/sh\n"))
-            self.assertIn("terok_shield.oci_hook", content)
-
-            # Both hook JSON files exist with correct structure
-            for stage_name in ("createRuntime", "poststop"):
-                hook_file = hooks / f"terok-shield-{stage_name}.json"
-                self.assertTrue(hook_file.exists())
-                data = json.loads(hook_file.read_text())
-                self.assertEqual(data["version"], "1.0.0")
-                self.assertEqual(data["hook"]["path"], str(ep))
-                self.assertIn(stage_name, data["stages"])
-                self.assertIn(ANNOTATION_KEY, data["when"]["annotations"])
+            ),
+            config=config,
+            runner=runner,
+            audit=audit,
+            dns=dns,
+            profiles=profiles,
+            ruleset=ruleset,
+        )
+
+    return _make_hook_mode
+
+
+def _annotation_value(args: list[str], key: str) -> str:
+    """Extract an annotation value from the podman args returned by pre_start()."""
+    prefix = f"{key}="
+    for index, arg in enumerate(args[:-1]):
+        if arg == "--annotation" and args[index + 1].startswith(prefix):
+            return args[index + 1][len(prefix) :]
+    raise AssertionError(f"annotation not found: {key}")
+
+
+def _set_euid(monkeypatch: pytest.MonkeyPatch, value: int) -> None:
+    """Patch ``os.geteuid()`` for rootless/rootful pre_start tests."""
+    monkeypatch.setattr("os.geteuid", lambda: value)
+
+
+def test_hook_mode_stores_collaborators(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """Construction keeps the injected collaborators and config."""
+    config = make_config()
+    runner = mock.MagicMock()
+    audit = mock.MagicMock()
+    dns = mock.MagicMock()
+    profiles = mock.MagicMock()
+    ruleset = mock.MagicMock()
+    harness = make_hook_mode(
+        config=config,
+        runner=runner,
+        audit=audit,
+        dns=dns,
+        profiles=profiles,
+        ruleset=ruleset,
+    )
+
+    # HookMode intentionally has no public collaborator accessors; this
+    # white-box test verifies constructor wiring directly.
+    assert harness.mode._config is config
+    assert harness.mode._runner is runner
+    assert harness.mode._audit is audit
+    assert harness.mode._dns is dns
+    assert harness.mode._profiles is profiles
+    assert harness.mode._ruleset is ruleset
+
+
+def test_pre_start_uses_pasta_for_rootless_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() uses pasta and loopback flags in rootless mode."""
+    _set_euid(monkeypatch, 1000)
+    harness = make_hook_mode(config=make_config(loopback_ports=(8080,)))
+    harness.runner.run.return_value = json.dumps({"host": {"rootlessNetworkCmd": "pasta"}})
+    harness.profiles.compose_profiles.return_value = [TEST_DOMAIN]
+
+    args = harness.mode.pre_start("test", ["dev-standard"])
+
+    network_arg = args[args.index("--network") + 1]
+    assert network_arg.startswith("pasta:")
+    assert "-T,8080" in network_arg
+
+
+def test_pre_start_installs_hooks_and_creates_state_dirs(
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() installs OCI hook files and state directories."""
+    _set_euid(monkeypatch, 0)
+    config = make_config()
+    harness = make_hook_mode(config=config)
+    harness.profiles.compose_profiles.return_value = []
+
+    harness.mode.pre_start("test", ["dev-standard"])
+
+    assert state.hooks_dir(config.state_dir).is_dir()
+    assert state.hook_entrypoint(config.state_dir).is_file()
+
+
+@pytest.mark.parametrize(
+    ("config_kwargs", "annotation_key", "expected_value"),
+    [
+        pytest.param(
+            {}, ANNOTATION_STATE_DIR_KEY, lambda cfg: str(cfg.state_dir.resolve()), id="state-dir"
+        ),
+        pytest.param(
+            {"audit_enabled": False},
+            ANNOTATION_AUDIT_ENABLED_KEY,
+            lambda _cfg: "false",
+            id="audit-enabled",
+        ),
+    ],
+)
+def test_pre_start_includes_expected_annotations(
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+    config_kwargs: dict[str, object],
+    annotation_key: str,
+    expected_value: Callable[[ShieldConfig], str],
+) -> None:
+    """pre_start() includes the expected state and audit annotations."""
+    _set_euid(monkeypatch, 0)
+    harness = make_hook_mode(config=make_config(**config_kwargs))
+    harness.profiles.compose_profiles.return_value = []
+
+    args = harness.mode.pre_start("test", ["dev-standard"])
+    assert _annotation_value(args, annotation_key) == expected_value(harness.config)
+
+
+@pytest.mark.parametrize(
+    ("method", "ip", "expected_action", "expected_set"),
+    [
+        pytest.param("allow_ip", TEST_IP1, "add", "allow_v4", id="allow-ipv4"),
+        pytest.param("allow_ip", IPV6_CLOUDFLARE, "add", "allow_v6", id="allow-ipv6"),
+        pytest.param("deny_ip", TEST_IP1, "delete", "allow_v4", id="deny-ipv4"),
+    ],
+)
+def test_allow_and_deny_use_expected_nft_set(
+    make_hook_mode: HookModeHarnessFactory,
+    method: str,
+    ip: str,
+    expected_action: str,
+    expected_set: str,
+) -> None:
+    """allow_ip()/deny_ip() target the correct nft set for each address family."""
+    harness = make_hook_mode()
+    harness.ruleset.safe_ip.return_value = ip
+
+    getattr(harness.mode, method)("test-ctr", ip)
+
+    nft_args = harness.runner.nft_via_nsenter.call_args.args
+    assert expected_action in nft_args
+    assert expected_set in nft_args
+
+
+def test_allow_persists_and_deduplicates_live_allowed(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """allow_ip() persists to live.allowed without duplicate lines."""
+    harness = make_hook_mode(config=make_config())
+    harness.ruleset.safe_ip.return_value = TEST_IP1
+
+    harness.mode.allow_ip("test-ctr", TEST_IP1)
+    harness.mode.allow_ip("test-ctr", TEST_IP1)
+
+    lines = state.live_allowed_path(harness.config.state_dir).read_text().splitlines()
+    assert lines.count(TEST_IP1) == 1
+
+
+@pytest.mark.parametrize(
+    ("profile_lines", "live_lines", "expect_deny_file", "nft_side_effect"),
+    [
+        pytest.param([TEST_IP1], [], True, None, id="profile-ip-persists-to-deny-list"),
+        pytest.param([], [TEST_IP1], False, None, id="live-only-no-deny-list"),
+        pytest.param(
+            [TEST_IP1],
+            [TEST_IP1],
+            True,
+            ExecError(["nft"], 1, "not in set"),
+            id="nft-error-still-persists",
+        ),
+    ],
+)
+def test_deny_updates_state_files(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+    profile_lines: list[str],
+    live_lines: list[str],
+    expect_deny_file: bool,
+    nft_side_effect: ExecError | None,
+) -> None:
+    """deny_ip() removes live entries and optionally persists a deny.list record."""
+    harness = make_hook_mode(config=make_config())
+    if profile_lines:
+        write_lines(state.profile_allowed_path(harness.config.state_dir), profile_lines)
+    if live_lines:
+        write_lines(state.live_allowed_path(harness.config.state_dir), live_lines)
+    harness.runner.nft_via_nsenter.side_effect = nft_side_effect
+    harness.ruleset.safe_ip.return_value = TEST_IP1
+
+    harness.mode.deny_ip("test-ctr", TEST_IP1)
+
+    live_path = state.live_allowed_path(harness.config.state_dir)
+    live_content = live_path.read_text().splitlines() if live_path.exists() else []
+    assert TEST_IP1 not in live_content
+
+    deny_file = state.deny_path(harness.config.state_dir)
+    assert deny_file.is_file() is expect_deny_file
+    if expect_deny_file:
+        assert TEST_IP1 in deny_file.read_text()
+
+
+def test_allow_after_deny_clears_deny_list(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """allow_ip() removes the IP from deny.list when re-allowing it."""
+    harness = make_hook_mode(config=make_config())
+    write_lines(state.deny_path(harness.config.state_dir), [TEST_IP1, TEST_IP2])
+    harness.ruleset.safe_ip.return_value = TEST_IP1
+
+    harness.mode.allow_ip("test-ctr", TEST_IP1)
+    denied = state.read_denied_ips(harness.config.state_dir)
+    assert TEST_IP1 not in denied
+    assert TEST_IP2 in denied
+
+
+def test_list_rules_returns_runner_output(make_hook_mode: HookModeHarnessFactory) -> None:
+    """list_rules() returns the nft ruleset text on success."""
+    harness = make_hook_mode()
+    harness.runner.nft_via_nsenter.return_value = "table inet terok_shield {}"
+    assert "terok_shield" in harness.mode.list_rules("test-ctr")
+
+
+def test_list_rules_returns_empty_on_exec_error(make_hook_mode: HookModeHarnessFactory) -> None:
+    """list_rules() tolerates ExecError and returns an empty string."""
+    harness = make_hook_mode()
+    harness.runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "error")
+    assert harness.mode.list_rules("test-ctr") == ""
+
+
+@pytest.mark.parametrize(
+    ("allow_all", "verify_errors", "expected_message"),
+    [
+        pytest.param(False, [], None, id="success"),
+        pytest.param(
+            False, ["error: missing policy"], "verification failed", id="verification-failure"
+        ),
+    ],
+)
+def test_shield_down_builds_bypass_ruleset(
+    make_hook_mode: HookModeHarnessFactory,
+    allow_all: bool,
+    verify_errors: list[str],
+    expected_message: str | None,
+) -> None:
+    """shield_down() applies bypass mode and verifies the resulting ruleset."""
+    harness = make_hook_mode()
+    harness.runner.nft_via_nsenter.side_effect = [
+        "",
+        "bad output" if verify_errors else "valid output",
+    ]
+    harness.ruleset.build_bypass.return_value = "bypass ruleset"
+    harness.ruleset.verify_bypass.return_value = verify_errors
+
+    if expected_message is None:
+        harness.mode.shield_down("test-ctr", allow_all=allow_all)
+        assert harness.runner.nft_via_nsenter.call_count == 2
+        harness.ruleset.build_bypass.assert_called_once_with(allow_all=allow_all)
+    else:
+        with pytest.raises(RuntimeError, match=expected_message):
+            harness.mode.shield_down("test-ctr", allow_all=allow_all)
+
+
+@pytest.mark.parametrize(
+    ("allowed_ips", "verify_errors", "expected_calls"),
+    [
+        pytest.param([], [], 2, id="no-cached-ips"),
+        pytest.param([TEST_IP1], [], 3, id="readds-cached-ips"),
+        pytest.param([], ["error"], 2, id="verification-failure"),
+    ],
+)
+def test_shield_up_reapplies_hook_ruleset(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+    allowed_ips: list[str],
+    verify_errors: list[str],
+    expected_calls: int,
+) -> None:
+    """shield_up() restores hook mode, optionally re-adding effective IPs."""
+    harness = make_hook_mode(config=make_config())
+    if allowed_ips:
+        write_lines(state.profile_allowed_path(harness.config.state_dir), allowed_ips)
+    harness.runner.nft_via_nsenter.side_effect = [""] * (expected_calls - 1) + [
+        "valid output" if not verify_errors else "bad output"
+    ]
+    harness.ruleset.build_hook.return_value = "hook ruleset"
+    harness.ruleset.verify_hook.return_value = verify_errors
+    harness.ruleset.add_elements_dual.return_value = (
+        f"add element {TEST_IP1}" if allowed_ips else ""
+    )
+
+    if verify_errors:
+        with pytest.raises(RuntimeError):
+            harness.mode.shield_up("test-ctr")
+    else:
+        harness.mode.shield_up("test-ctr")
+    assert harness.runner.nft_via_nsenter.call_count == expected_calls
+
+
+@pytest.mark.parametrize(
+    ("nft_output", "verify_bypass", "verify_hook", "expected"),
+    [
+        pytest.param("", None, None, ShieldState.INACTIVE, id="inactive"),
+        pytest.param(hook_ruleset(), ["not bypass"], [], ShieldState.UP, id="up"),
+        pytest.param(bypass_ruleset(), [], None, ShieldState.DOWN, id="down"),
+        pytest.param(
+            "random nft stuff", ["not bypass"], ["not hook"], ShieldState.ERROR, id="error"
+        ),
+    ],
+)
+def test_shield_state_classifies_rulesets(
+    make_hook_mode: HookModeHarnessFactory,
+    nft_output: str,
+    verify_bypass: list[str] | None,
+    verify_hook: list[str] | None,
+    expected: ShieldState,
+) -> None:
+    """shield_state() distinguishes inactive, hook, bypass, and invalid rulesets."""
+    harness = make_hook_mode()
+    harness.runner.nft_via_nsenter.return_value = nft_output
+    if verify_bypass is not None:
+        harness.ruleset.verify_bypass.return_value = verify_bypass
+    if verify_hook is not None:
+        harness.ruleset.verify_hook.return_value = verify_hook
+    assert harness.mode.shield_state("test") == expected
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected", "method_name"),
+    [
+        pytest.param({}, "hook ruleset", "build_hook", id="default-hook-preview"),
+        pytest.param(
+            {"down": True, "allow_all": True}, "bypass ruleset", "build_bypass", id="bypass-preview"
+        ),
+    ],
+)
+def test_preview_delegates_to_ruleset_builder(
+    make_hook_mode: HookModeHarnessFactory,
+    kwargs: dict[str, bool],
+    expected: str,
+    method_name: str,
+) -> None:
+    """preview() delegates to the right ruleset builder entry point."""
+    harness = make_hook_mode()
+    getattr(harness.ruleset, method_name).return_value = expected
+    assert harness.mode.preview(**kwargs) == expected
+
+
+@pytest.mark.parametrize(
+    ("runner_output", "expected"),
+    [
+        pytest.param(json.dumps({"host": {"rootlessNetworkCmd": "pasta"}}), "pasta", id="pasta"),
+        pytest.param(
+            json.dumps({"host": {"rootlessNetworkCmd": "slirp4netns"}}),
+            "slirp4netns",
+            id="slirp4netns",
+        ),
+        pytest.param("", "pasta", id="empty-output-fallback"),
+        pytest.param("not json", "pasta", id="invalid-json-fallback"),
+    ],
+)
+def test_detect_rootless_network_mode(
+    make_hook_mode: HookModeHarnessFactory,
+    runner_output: str,
+    expected: str,
+) -> None:
+    """_detect_rootless_network_mode() prefers podman info but fails safe to pasta."""
+    harness = make_hook_mode()
+    harness.runner.run.return_value = runner_output
+    assert harness.mode._detect_rootless_network_mode() == expected
+
+
+def test_install_hooks_creates_entrypoint_and_hook_jsons(tmp_path: Path) -> None:
+    """install_hooks() writes the executable entrypoint plus both hook descriptors."""
+    hook_entrypoint = tmp_path / BIN_DIR_NAME / HOOK_ENTRYPOINT_NAME
+    hooks_dir = tmp_path / HOOKS_DIR_NAME
+
+    install_hooks(hook_entrypoint=hook_entrypoint, hooks_dir=hooks_dir)
+
+    assert hook_entrypoint.exists()
+    assert hook_entrypoint.stat().st_mode & 0o100
+    assert hook_entrypoint.read_text().startswith("#!/bin/sh\n")
+    assert "terok_shield.oci_hook" in hook_entrypoint.read_text()
+
+    for stage_name in ("createRuntime", "poststop"):
+        hook_file = hooks_dir / f"terok-shield-{stage_name}.json"
+        assert hook_file.exists()
+        data = json.loads(hook_file.read_text())
+        assert data["version"] == "1.0.0"
+        assert data["hook"]["path"] == str(hook_entrypoint)
+        assert stage_name in data["stages"]
