@@ -104,3 +104,6 @@ enable = true
 vcs = "git"
 pattern = "^v(?P<base>\\d+\\.\\d+\\.\\d+)$"
 style = "pep440"
+
+[tool.poetry-dynamic-versioning.substitution]
+folders = [{path = "src"}]

@@ -15,7 +15,14 @@ The primary entry point is the ``Shield`` facade class:
 from collections.abc import Iterator
 from pathlib import Path
 
-__version__ = "0.1.3"
+__version__: str = "0.0.0"  # placeholder; replaced at build time
+
+from importlib.metadata import PackageNotFoundError, version as _meta_version
+
+try:
+    __version__ = _meta_version("terok-shield")
+except PackageNotFoundError:
+    pass  # editable install or running from source without metadata
 
 from . import state
 from .audit import AuditLogger
