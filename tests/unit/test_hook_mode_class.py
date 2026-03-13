@@ -21,6 +21,7 @@ from terok_shield.mode_hook import HookMode, install_hooks
 from terok_shield.nft import bypass_ruleset, hook_ruleset
 from terok_shield.run import ExecError
 
+from ..testfs import BIN_DIR_NAME, HOOK_ENTRYPOINT_NAME, HOOKS_DIR_NAME
 from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1, TEST_IP2
 from .helpers import write_lines
 
@@ -442,8 +443,8 @@ def test_detect_rootless_network_mode(
 
 def test_install_hooks_creates_entrypoint_and_hook_jsons(tmp_path: Path) -> None:
     """install_hooks() writes the executable entrypoint plus both hook descriptors."""
-    hook_entrypoint = tmp_path / "bin" / "terok-shield-hook"
-    hooks_dir = tmp_path / "hooks"
+    hook_entrypoint = tmp_path / BIN_DIR_NAME / HOOK_ENTRYPOINT_NAME
+    hooks_dir = tmp_path / HOOKS_DIR_NAME
 
     install_hooks(hook_entrypoint=hook_entrypoint, hooks_dir=hooks_dir)
 

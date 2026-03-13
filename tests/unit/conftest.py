@@ -10,6 +10,8 @@ import pytest
 
 from terok_shield.config import ShieldConfig
 
+from ..testfs import CONFIG_FILENAME, CONFIG_ROOT_NAME, STATE_ROOT_NAME
+
 
 @pytest.fixture
 def state_dir(tmp_path: Path) -> Path:
@@ -20,7 +22,7 @@ def state_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def state_root(tmp_path: Path) -> Path:
     """Return a dedicated state root directory for CLI-style tests."""
-    root = tmp_path / "state"
+    root = tmp_path / STATE_ROOT_NAME
     root.mkdir()
     return root
 
@@ -28,7 +30,7 @@ def state_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def config_root(tmp_path: Path) -> Path:
     """Return a dedicated config root directory for CLI-style tests."""
-    root = tmp_path / "config"
+    root = tmp_path / CONFIG_ROOT_NAME
     root.mkdir()
     return root
 
@@ -50,7 +52,7 @@ def write_config(config_root: Path) -> Callable[[str], Path]:
     """Write ``config.yml`` under the isolated config root and return its path."""
 
     def _write_config(text: str) -> Path:
-        config_file = config_root / "config.yml"
+        config_file = config_root / CONFIG_FILENAME
         config_file.write_text(text)
         return config_file
 

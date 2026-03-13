@@ -12,7 +12,14 @@ from unittest import mock
 import pytest
 
 from terok_shield import state
-from terok_shield.config import ANNOTATION_KEY, ANNOTATION_NAME_KEY
+from terok_shield.config import (
+    ANNOTATION_AUDIT_ENABLED_KEY,
+    ANNOTATION_KEY,
+    ANNOTATION_LOOPBACK_PORTS_KEY,
+    ANNOTATION_NAME_KEY,
+    ANNOTATION_STATE_DIR_KEY,
+    ANNOTATION_VERSION_KEY,
+)
 from terok_shield.oci_hook import (
     _classify_cidr,
     _classify_ips,
@@ -22,6 +29,7 @@ from terok_shield.oci_hook import (
     hook_main,
 )
 
+from ..testfs import RELATIVE_STATE_SUBPATH
 from ..testnet import (
     BLOCKED_TARGET_IP,
     BLOCKED_TARGET_NET,
@@ -49,9 +57,9 @@ def _valid_annotations(state_dir: Path) -> dict[str, str]:
     return {
         ANNOTATION_KEY: "dev-standard",
         ANNOTATION_NAME_KEY: "my-ctr",
-        "terok.shield.state_dir": str(state_dir),
-        "terok.shield.loopback_ports": "1234",
-        "terok.shield.version": str(state.BUNDLE_VERSION),
+        ANNOTATION_STATE_DIR_KEY: str(state_dir),
+        ANNOTATION_LOOPBACK_PORTS_KEY: "1234",
+        ANNOTATION_VERSION_KEY: str(state.BUNDLE_VERSION),
     }
 
 
@@ -228,17 +236,19 @@ def test_hook_main_handles_pid_requirements(stdin_data: str, stage: str, expecte
 @pytest.mark.parametrize(
     ("mutate", "expected"),
     [
-        pytest.param(lambda ann: ann.pop("terok.shield.state_dir"), 1, id="missing-state-dir"),
+        pytest.param(lambda ann: ann.pop(ANNOTATION_STATE_DIR_KEY), 1, id="missing-state-dir"),
         pytest.param(
-            lambda ann: ann.__setitem__("terok.shield.version", "999"), 1, id="version-mismatch"
+            lambda ann: ann.__setitem__(ANNOTATION_VERSION_KEY, "999"),
+            1,
+            id="version-mismatch",
         ),
         pytest.param(
-            lambda ann: ann.__setitem__("terok.shield.version", "not-a-number"),
+            lambda ann: ann.__setitem__(ANNOTATION_VERSION_KEY, "not-a-number"),
             1,
             id="invalid-version",
         ),
         pytest.param(
-            lambda ann: ann.__setitem__("terok.shield.state_dir", "relative/path"),
+            lambda ann: ann.__setitem__(ANNOTATION_STATE_DIR_KEY, RELATIVE_STATE_SUBPATH),
             1,
             id="relative-state-dir",
         ),
@@ -273,7 +283,7 @@ def test_hook_main_configures_audit_logger_from_annotation(
 ) -> None:
     """hook_main() interprets the audit_enabled annotation safely."""
     annotations = _valid_annotations(tmp_path)
-    annotations["terok.shield.audit_enabled"] = audit_value
+    annotations[ANNOTATION_AUDIT_ENABLED_KEY] = audit_value
     assert hook_main(_oci_state(annotations=annotations)) == 0
     _, kwargs = mock_audit_cls.call_args
     assert kwargs["enabled"] is expected_enabled
