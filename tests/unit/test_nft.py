@@ -159,7 +159,7 @@ def test_hook_ruleset_default_tcp_rules_are_dns_only() -> None:
     """Without loopback ports, TCP port rules must be limited to DNS."""
     tcp_rules = [line.strip() for line in hook_ruleset().splitlines() if "tcp dport" in line]
     assert tcp_rules
-    assert all("53" in line for line in tcp_rules)
+    assert all(line.startswith("tcp dport 53 ") for line in tcp_rules)
 
 
 @pytest.mark.parametrize(
