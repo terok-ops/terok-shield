@@ -117,10 +117,10 @@ class Shield:
         for ip in ips:
             try:
                 self._mode.allow_ip(container, ip)
-                allowed.append(ip)
-                self.audit.log_event(container, "allowed", dest=ip, detail=f"target={target}")
-            except Exception:
-                pass
+            except (ExecError, OSError):
+                continue
+            allowed.append(ip)
+            self.audit.log_event(container, "allowed", dest=ip, detail=f"target={target}")
         return allowed
 
     def deny(self, container: str, target: str) -> list[str]:
@@ -130,10 +130,10 @@ class Shield:
         for ip in ips:
             try:
                 self._mode.deny_ip(container, ip)
-                denied.append(ip)
-                self.audit.log_event(container, "denied", dest=ip, detail=f"target={target}")
-            except Exception:
-                pass
+            except (ExecError, OSError):
+                continue
+            denied.append(ip)
+            self.audit.log_event(container, "denied", dest=ip, detail=f"target={target}")
         return denied
 
     def rules(self, container: str) -> str:

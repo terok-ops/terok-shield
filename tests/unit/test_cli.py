@@ -21,6 +21,7 @@ from terok_shield.cli import (
     _auto_detect_mode,
     _build_config,
     _build_parser,
+    _find_podman,
     _load_config_file,
     _parse_loopback_ports,
     _resolve_config_root,
@@ -31,6 +32,7 @@ from terok_shield.config import ShieldMode
 
 from ..testfs import (
     AUDIT_FILENAME,
+    BIN_DIR_NAME,
     CONTAINERS_DIR_NAME,
     FAKE_CONFIG_DIR,
     FAKE_STATE_DIR,
@@ -40,6 +42,7 @@ from ..testfs import (
     FORBIDDEN_TRAVERSAL,
     NFT_BINARY,
     NONEXISTENT_DIR,
+    PODMAN_BINARY,
     STATE_DIR_WITH_SPACES,
     VOLUME_MOUNT_DATA,
     VOLUME_MOUNT_HOST,
@@ -68,7 +71,7 @@ class CliDispatchHarness:
 class CliRunHarness(CliDispatchHarness):
     """Patched CLI collaborators for the ``run`` subcommand."""
 
-    execvp: mock.MagicMock
+    execv: mock.MagicMock
 
 
 @pytest.fixture
@@ -89,13 +92,14 @@ def cli_dispatch() -> Iterator[CliDispatchHarness]:
 
 @pytest.fixture
 def cli_run() -> Iterator[CliRunHarness]:
-    """Patch CLI collaborators plus ``os.execvp`` for ``run`` tests."""
+    """Patch CLI collaborators plus ``os.execv`` for ``run`` tests."""
     with (
         mock.patch("terok_shield.cli._build_config") as build_config,
         mock.patch("terok_shield.cli.Shield") as shield_cls,
-        mock.patch("os.execvp") as execvp,
+        mock.patch("terok_shield.cli._find_podman", return_value=PODMAN_BINARY),
+        mock.patch("os.execv") as execv,
     ):
-        yield CliRunHarness(build_config=build_config, shield_cls=shield_cls, execvp=execvp)
+        yield CliRunHarness(build_config=build_config, shield_cls=shield_cls, execv=execv)
 
 
 def _write_audit_entries(state_root: Path, container: str, entries: list[dict[str, str]]) -> Path:
@@ -343,12 +347,54 @@ def test_run_execs_podman_with_shield_flags(
     cli_run.shield.pre_start.return_value = ["--annotation", "a=b"]
     main(argv)
     cli_run.shield.pre_start.assert_called_once_with(_CONTAINER, profiles)
-    cli_run.execvp.assert_called_once()
-    podman_argv = cli_run.execvp.call_args.args[1]
-    assert podman_argv[:3] == ["podman", "run", "--name"]
+    cli_run.execv.assert_called_once()
+    assert cli_run.execv.call_args.args[0] == PODMAN_BINARY
+    podman_argv = cli_run.execv.call_args.args[1]
+    assert podman_argv[:3] == [PODMAN_BINARY, "run", "--name"]
     assert _CONTAINER in podman_argv
     for item in expected_tail:
         assert item in podman_argv
+
+
+def test_find_podman_resolves_relative_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_find_podman() resolves relative PATH hits to an absolute executable path."""
+    podman_path = tmp_path / BIN_DIR_NAME / "podman"
+    podman_path.parent.mkdir()
+    podman_path.write_text("#!/bin/sh\n")
+    podman_path.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "terok_shield.cli.shutil.which", lambda _name: str(Path(BIN_DIR_NAME) / "podman")
+    )
+    assert _find_podman() == str(podman_path.resolve())
+
+
+def test_find_podman_rejects_non_executable_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_find_podman() rejects resolved paths that are not executable."""
+    podman_path = tmp_path / BIN_DIR_NAME / "podman"
+    podman_path.parent.mkdir()
+    podman_path.write_text("not executable\n")
+    podman_path.chmod(0o644)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "terok_shield.cli.shutil.which", lambda _name: str(Path(BIN_DIR_NAME) / "podman")
+    )
+    with pytest.raises(OSError, match="podman binary not found"):
+        _find_podman()
+
+
+def test_run_reports_missing_podman(cli_dispatch: CliDispatchHarness) -> None:
+    """run() exits with a clear error when podman cannot be found."""
+    cli_dispatch.shield.pre_start.return_value = ["--annotation", "a=b"]
+    with mock.patch("terok_shield.cli.shutil.which", return_value=None):
+        with pytest.raises(SystemExit) as ctx:
+            main(["run", _CONTAINER, "--", _IMAGE])
+    assert ctx.value.code == 1
+    cli_dispatch.shield.pre_start.assert_not_called()
 
 
 @pytest.mark.parametrize(
