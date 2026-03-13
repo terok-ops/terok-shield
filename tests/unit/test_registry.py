@@ -63,15 +63,17 @@ class TestHandlers(unittest.TestCase):
         """_handle_allow raises RuntimeError when no IPs allowed."""
         shield = mock.MagicMock()
         shield.allow.return_value = []
-        with self.assertRaises(RuntimeError, msg="No IPs allowed"):
+        with self.assertRaises(RuntimeError) as ctx:
             _handle_allow(shield, "ctr", target="bad")
+        self.assertIn("No IPs allowed", str(ctx.exception))
 
     def test_handle_deny_raises_on_failure(self) -> None:
         """_handle_deny raises RuntimeError when no IPs denied."""
         shield = mock.MagicMock()
         shield.deny.return_value = []
-        with self.assertRaises(RuntimeError, msg="No IPs denied"):
+        with self.assertRaises(RuntimeError) as ctx:
             _handle_deny(shield, "ctr", target="bad")
+        self.assertIn("No IPs denied", str(ctx.exception))
 
     def test_handle_logs_prints_json(self) -> None:
         """_handle_logs prints JSONL entries from shield.tail_log."""
@@ -117,5 +119,6 @@ class TestHandlers(unittest.TestCase):
     def test_handle_preview_all_without_down_raises(self) -> None:
         """_handle_preview raises ValueError when allow_all without down."""
         shield = mock.MagicMock()
-        with self.assertRaises(ValueError, msg="--all requires --down"):
+        with self.assertRaises(ValueError) as ctx:
             _handle_preview(shield, allow_all=True)
+        self.assertIn("--all requires --down", str(ctx.exception))

@@ -212,6 +212,9 @@ COMMANDS: tuple[CommandDef, ...] = (
         handler=_handle_rules,
         needs_container=True,
     ),
+    # NOTE: CLI special-cases logs with --container optional for aggregated mode.
+    # The terok integration layer always has a per-container Shield, so the
+    # handler receives container and tails that container's audit log.
     CommandDef(
         name="logs",
         help="Show audit log entries",
