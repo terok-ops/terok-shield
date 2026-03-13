@@ -185,7 +185,7 @@ Path functions in `state.py` derive all paths from `state_dir`. `BUNDLE_VERSION`
 ### Configuration layer separation
 
 - **Library** (`config.py`): Pure data definitions — `ShieldConfig`, `ShieldMode`, `ShieldState`, `ShieldModeBackend` protocol, annotation constants
-- **Registry** (`registry.py`): Command definitions (`CommandDef`, `ArgDef`, `COMMANDS`) and handler functions — single source of truth for both CLI and terok integration
+- **Registry** (`registry.py`): Command definitions (`CommandDef`, `ArgDef`, `COMMANDS`) and reusable handler functions — single source of truth for all CLI subcommands
 - **CLI** (`cli.py`): Config construction — reads `config.yml`, env vars, XDG paths; builds `ShieldConfig` for each command; builds argparse from the registry
 
 ## Key Guidelines
