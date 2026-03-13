@@ -72,6 +72,11 @@ def _add_element_command(set_name: str, *ips: str) -> str:
     return f"add element {NFT_TABLE} {set_name} {{ {', '.join(ips)} }}\n"
 
 
+def _dns_accept_rules(ruleset: str) -> set[str]:
+    """Return the exact DNS exception lines from a rendered ruleset."""
+    return {line.strip() for line in ruleset.splitlines() if "dport 53" in line}
+
+
 # ── safe_ip() ---------------------------------------------------------
 
 
@@ -157,8 +162,10 @@ def test_hook_ruleset_blocks_each_ipv6_private_range(private_net: str) -> None:
 def test_hook_ruleset_accepts_dns_to_the_configured_forwarder() -> None:
     """Only the configured DNS forwarder is granted the DNS exception."""
     ruleset = hook_ruleset(dns=LINK_LOCAL_DNS)
-    assert f"udp dport 53 ip daddr {LINK_LOCAL_DNS} accept" in ruleset
-    assert f"tcp dport 53 ip daddr {LINK_LOCAL_DNS} accept" in ruleset
+    assert _dns_accept_rules(ruleset) == {
+        f"udp dport 53 ip daddr {LINK_LOCAL_DNS} accept",
+        f"tcp dport 53 ip daddr {LINK_LOCAL_DNS} accept",
+    }
 
 
 def test_hook_ruleset_default_tcp_rules_are_dns_only() -> None:
@@ -473,8 +480,10 @@ def test_bypass_ruleset_emits_loopback_port_rules() -> None:
 def test_bypass_ruleset_accepts_dns_to_the_configured_forwarder() -> None:
     """Bypass mode retains the explicit DNS exception for the configured forwarder."""
     ruleset = bypass_ruleset(dns=LINK_LOCAL_DNS)
-    assert f"udp dport 53 ip daddr {LINK_LOCAL_DNS} accept" in ruleset
-    assert f"tcp dport 53 ip daddr {LINK_LOCAL_DNS} accept" in ruleset
+    assert _dns_accept_rules(ruleset) == {
+        f"udp dport 53 ip daddr {LINK_LOCAL_DNS} accept",
+        f"tcp dport 53 ip daddr {LINK_LOCAL_DNS} accept",
+    }
 
 
 # ── verify_bypass_ruleset() ------------------------------------------

@@ -31,6 +31,8 @@ from terok_shield.cli import (
 from terok_shield.config import ShieldMode
 
 from ..testfs import (
+    AUDIT_FILENAME,
+    CONTAINERS_DIR_NAME,
     FAKE_CONFIG_DIR,
     FAKE_STATE_DIR,
     FAKE_STATE_DIR_STR,
@@ -48,7 +50,6 @@ from .helpers import write_jsonl
 
 _CONTAINER = "test"
 _IMAGE = "alpine:latest"
-_AUDIT_FILENAME = "audit.jsonl"
 
 
 @dataclass
@@ -100,7 +101,7 @@ def cli_run() -> Iterator[CliRunHarness]:
 
 def _write_audit_entries(state_root: Path, container: str, entries: list[dict[str, str]]) -> Path:
     """Write JSONL audit entries for a specific container."""
-    return write_jsonl(state_root / "containers" / container / _AUDIT_FILENAME, entries)
+    return write_jsonl(state_root / CONTAINERS_DIR_NAME / container / AUDIT_FILENAME, entries)
 
 
 def _set_env(
@@ -640,7 +641,7 @@ def test_logs_global_mode_ignores_containers_without_audit_files(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """logs reports no audit logs when container directories lack audit files."""
-    (state_root / "containers" / "empty-ctr").mkdir(parents=True)
+    (state_root / CONTAINERS_DIR_NAME / "empty-ctr").mkdir(parents=True)
     main(["--state-dir", str(state_root), "logs"])
     assert "No audit logs found" in capsys.readouterr().out
 

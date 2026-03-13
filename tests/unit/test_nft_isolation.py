@@ -17,6 +17,8 @@ class TestNftImportIsolation:
 
     def test_nft_has_only_allowed_imports(self) -> None:
         """Verify nft.py imports only stdlib and nft_constants."""
+        # Keep the source path inline here so auditors can review the exact
+        # security-boundary file target without indirection.
         source = (Path(__file__).parents[2] / "src" / "terok_shield" / "nft.py").read_text()
         tree = ast.parse(source)
         stdlib = {"ipaddress", "re", "textwrap"}

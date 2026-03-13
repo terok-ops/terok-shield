@@ -11,9 +11,10 @@ from unittest import mock
 
 import pytest
 
+from terok_shield import state
 from terok_shield.dns import DnsResolver
 
-from ..testfs import NONEXISTENT_DIR
+from ..testfs import NONEXISTENT_DIR, TEST_CACHE_FILENAME, TEST_SUBDIR_NAME
 from ..testnet import (
     CLOUDFLARE_DOMAIN,
     GOOGLE_DNS_DOMAIN,
@@ -56,26 +57,26 @@ def test_direct_init() -> None:
 
 def test_read_cache_missing_file() -> None:
     """_read_cache() returns an empty list for a missing cache file."""
-    assert DnsResolver._read_cache(NONEXISTENT_DIR / "file.resolved") == []
+    assert DnsResolver._read_cache(NONEXISTENT_DIR / TEST_CACHE_FILENAME) == []
 
 
 def test_read_write_roundtrip(tmp_path: Path) -> None:
     """_write_cache() and _read_cache() round-trip cached IPs."""
-    cache_path = tmp_path / "test.resolved"
+    cache_path = tmp_path / TEST_CACHE_FILENAME
     DnsResolver._write_cache(cache_path, [TEST_IP1, TEST_IP2])
     assert DnsResolver._read_cache(cache_path) == [TEST_IP1, TEST_IP2]
 
 
 def test_write_cache_creates_parent_dirs(tmp_path: Path) -> None:
     """_write_cache() creates missing parent directories."""
-    cache_path = tmp_path / "subdir" / "test.resolved"
+    cache_path = tmp_path / TEST_SUBDIR_NAME / TEST_CACHE_FILENAME
     DnsResolver._write_cache(cache_path, [TEST_IP1])
     assert cache_path.is_file()
 
 
 def test_write_cache_empty_list(tmp_path: Path) -> None:
     """_write_cache() writes an empty file for an empty IP list."""
-    cache_path = tmp_path / "test.resolved"
+    cache_path = tmp_path / TEST_CACHE_FILENAME
     DnsResolver._write_cache(cache_path, [])
     assert cache_path.read_text() == ""
 
@@ -139,7 +140,7 @@ def test_resolve_and_cache_writes_cache(
     harness = make_resolver()
     harness.runner.dig_all.return_value = [TEST_IP1]
 
-    cache_path = tmp_path / "profile.allowed"
+    cache_path = state.profile_allowed_path(tmp_path)
     assert harness.resolver.resolve_and_cache([TEST_DOMAIN], cache_path) == [TEST_IP1]
     assert cache_path.is_file()
 
@@ -150,7 +151,7 @@ def test_resolve_and_cache_returns_fresh_cache(
 ) -> None:
     """resolve_and_cache() returns fresh cached IPs without re-resolving DNS."""
     harness = make_resolver()
-    cache_path = tmp_path / "profile.allowed"
+    cache_path = state.profile_allowed_path(tmp_path)
     cache_path.write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
 
     assert harness.resolver.resolve_and_cache([TEST_DOMAIN], cache_path, max_age=3600) == [
@@ -168,7 +169,7 @@ def test_resolve_and_cache_re_resolves_stale_cache(
     harness = make_resolver()
     harness.runner.dig_all.return_value = [TEST_IP2]
 
-    cache_path = tmp_path / "profile.allowed"
+    cache_path = state.profile_allowed_path(tmp_path)
     cache_path.write_text(f"{TEST_IP1}\n")
     os.utime(cache_path, (0, 0))
 
@@ -184,7 +185,7 @@ def test_resolve_and_cache_mixed_entries(
     harness = make_resolver()
     harness.runner.dig_all.return_value = [TEST_IP2]
 
-    cache_path = tmp_path / "profile.allowed"
+    cache_path = state.profile_allowed_path(tmp_path)
     result = harness.resolver.resolve_and_cache([TEST_IP1, TEST_DOMAIN], cache_path)
     assert TEST_IP1 in result
     assert TEST_IP2 in result

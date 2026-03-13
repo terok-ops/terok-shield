@@ -117,6 +117,10 @@ def test_apply_successfully_applies_ruleset_and_verifies(
     harness.executor.apply("test-ctr", "42")
 
     assert harness.runner.nft_via_nsenter.call_count == expected_calls
+    if allowed_ips:
+        harness.ruleset.add_elements_dual.assert_called_once_with(allowed_ips)
+    else:
+        harness.ruleset.add_elements_dual.assert_not_called()
     details = _audit_details(harness)
     assert "ruleset applied" in details
     assert "verification passed" in details
@@ -235,6 +239,7 @@ def test_apply_logs_private_ranges_as_notes(make_executor: HookExecutorHarnessFa
 
     harness.executor.apply("test-ctr", "42")
 
+    harness.ruleset.add_elements_dual.assert_called_once_with([RFC1918_HOST])
     note_calls = [call for call in harness.audit.log_event.call_args_list if call.args[1] == "note"]
     assert any("private range" in call.kwargs.get("detail", "") for call in note_calls)
 

@@ -70,6 +70,7 @@ class HookMainHarness:
 
     executor_cls: mock.MagicMock
     audit_cls: mock.MagicMock
+    ruleset_builder_cls: mock.MagicMock
 
     @property
     def executor(self) -> mock.MagicMock:
@@ -82,9 +83,15 @@ def hook_main_harness(monkeypatch: pytest.MonkeyPatch) -> HookMainHarness:
     """Patch hook_main() collaborators that would otherwise do real work."""
     executor_cls = mock.MagicMock()
     audit_cls = mock.MagicMock()
+    ruleset_builder_cls = mock.MagicMock()
     monkeypatch.setattr("terok_shield.oci_hook.HookExecutor", executor_cls)
     monkeypatch.setattr("terok_shield.oci_hook.AuditLogger", audit_cls)
-    return HookMainHarness(executor_cls=executor_cls, audit_cls=audit_cls)
+    monkeypatch.setattr("terok_shield.oci_hook.RulesetBuilder", ruleset_builder_cls)
+    return HookMainHarness(
+        executor_cls=executor_cls,
+        audit_cls=audit_cls,
+        ruleset_builder_cls=ruleset_builder_cls,
+    )
 
 
 @pytest.mark.parametrize(
@@ -224,6 +231,7 @@ def test_hook_main_success(hook_main_harness: HookMainHarness, tmp_path: Path) -
     """hook_main() returns 0 and applies the ruleset on valid createRuntime input."""
     rc = hook_main(_oci_state("test-ctr", 42, annotations=_valid_annotations(tmp_path)))
     assert rc == 0
+    hook_main_harness.ruleset_builder_cls.assert_called_once_with(loopback_ports=(1234,))
     hook_main_harness.executor.apply.assert_called_once_with("test-ctr", "42")
 
 

@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from terok_shield import state
 from terok_shield.audit import AuditLogger
 
-from ..testfs import NONEXISTENT_DIR
+from ..testfs import NONEXISTENT_DIR, TEST_SUBDIR_NAME
 from ..testnet import TEST_IP1
 from .helpers import write_jsonl
 
@@ -26,7 +27,7 @@ def make_logger(tmp_path: Path) -> Callable[..., AuditLogger]:
     """Create an AuditLogger rooted under the test temp directory."""
 
     def _make_logger(*, audit_path: Path | None = None, enabled: bool = True) -> AuditLogger:
-        return AuditLogger(audit_path=audit_path or tmp_path / "audit.jsonl", enabled=enabled)
+        return AuditLogger(audit_path=audit_path or state.audit_path(tmp_path), enabled=enabled)
 
     return _make_logger
 
@@ -51,7 +52,7 @@ def test_audit_logger_enabled_toggle(make_logger: Callable[..., AuditLogger]) ->
 
 def test_log_event_writes_jsonl(make_logger: Callable[..., AuditLogger], tmp_path: Path) -> None:
     """log_event() appends a JSONL audit record."""
-    path = tmp_path / "audit.jsonl"
+    path = state.audit_path(tmp_path)
     logger = make_logger(audit_path=path)
     logger.log_event("test-ctr", "setup", detail="test")
     entry = _read_entry(path)
@@ -65,7 +66,7 @@ def test_log_event_omits_missing_optional_fields(
     make_logger: Callable[..., AuditLogger], tmp_path: Path
 ) -> None:
     """Optional event fields are only included when provided."""
-    path = tmp_path / "audit.jsonl"
+    path = state.audit_path(tmp_path)
     logger = make_logger(audit_path=path)
     logger.log_event("test-ctr", "denied", dest=TEST_IP1)
     entry = _read_entry(path)
@@ -77,7 +78,7 @@ def test_log_event_skips_writes_when_disabled(
     make_logger: Callable[..., AuditLogger], tmp_path: Path
 ) -> None:
     """Disabled loggers do not create or append log files."""
-    path = tmp_path / "audit.jsonl"
+    path = state.audit_path(tmp_path)
     make_logger(audit_path=path, enabled=False).log_event("test-ctr", "setup", detail="test")
     assert not path.exists()
 
@@ -93,14 +94,14 @@ def test_log_event_ignores_write_errors(
         raise OSError("disk full")
 
     monkeypatch.setattr(Path, "open", _fail_open)
-    make_logger(audit_path=tmp_path / "audit.jsonl").log_event("test-ctr", "setup")
+    make_logger(audit_path=state.audit_path(tmp_path)).log_event("test-ctr", "setup")
 
 
 def test_log_event_appends_multiple_events(
     make_logger: Callable[..., AuditLogger], tmp_path: Path
 ) -> None:
     """Multiple events append to the same file."""
-    path = tmp_path / "audit.jsonl"
+    path = state.audit_path(tmp_path)
     logger = make_logger(audit_path=path)
     logger.log_event("test-ctr", "setup")
     logger.log_event("test-ctr", "allowed", dest=TEST_IP1)
@@ -111,7 +112,7 @@ def test_log_event_creates_parent_dirs(
     make_logger: Callable[..., AuditLogger], tmp_path: Path
 ) -> None:
     """log_event() creates missing parent directories as needed."""
-    path = tmp_path / "subdir" / "audit.jsonl"
+    path = state.audit_path(tmp_path / TEST_SUBDIR_NAME)
     make_logger(audit_path=path).log_event("test-ctr", "setup")
     assert path.exists()
 
@@ -142,11 +143,11 @@ def test_tail_log_reads_recent_entries(
     expected_actions: list[str],
 ) -> None:
     """tail_log() returns recent valid JSON entries in order."""
-    path = write_jsonl(tmp_path / "audit.jsonl", entries)
+    path = write_jsonl(state.audit_path(tmp_path), entries)
     result = list(make_logger(audit_path=path).tail_log(n=n))
     assert [entry["action"] for entry in result] == expected_actions
 
 
 def test_tail_log_returns_empty_for_missing_file() -> None:
     """tail_log() yields nothing when the audit file does not exist."""
-    assert list(AuditLogger(audit_path=NONEXISTENT_DIR / "audit.jsonl").tail_log()) == []
+    assert list(AuditLogger(audit_path=state.audit_path(NONEXISTENT_DIR)).tail_log()) == []
