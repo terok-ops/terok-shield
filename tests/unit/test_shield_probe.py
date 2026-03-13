@@ -31,6 +31,19 @@ def _run_probe(mock_sock: MagicMock, mock_poller: MagicMock) -> dict[str, object
             return probe(TEST_IP1, 443, timeout=1.0)
 
 
+def _run_main(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    *,
+    probe_mock: MagicMock | None = None,
+) -> int:
+    """Run shield_probe.main() with patched argv and optional probe mock."""
+    monkeypatch.setattr("sys.argv", argv)
+    if probe_mock is not None:
+        monkeypatch.setattr("terok_shield.resources.shield_probe.probe", probe_mock)
+    return main()
+
+
 @pytest.fixture
 def make_probe_result() -> Iterator[ProbeResultFactory]:
     """Return a helper that runs probe() with mocked socket/poll collaborators."""
@@ -207,13 +220,11 @@ def test_main_outputs_expected_json(
     expected_output: str | dict[str, object],
 ) -> None:
     """main() prints usage or JSON output for success and argument errors."""
-    monkeypatch.setattr("sys.argv", argv)
     if probe_result is None:
-        rc = main()
+        rc = _run_main(monkeypatch, argv)
     else:
         mock_probe = MagicMock(return_value=probe_result)
-        monkeypatch.setattr("terok_shield.resources.shield_probe.probe", mock_probe)
-        rc = main()
+        rc = _run_main(monkeypatch, argv, probe_mock=mock_probe)
         mock_probe.assert_called_once_with(*expected_probe_args)
 
     captured = capsys.readouterr()
@@ -229,12 +240,14 @@ def test_main_handles_probe_exceptions(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Unexpected probe exceptions are reported as JSON errors."""
-    monkeypatch.setattr("sys.argv", ["shield_probe.py", TEST_IP1])
-    monkeypatch.setattr(
-        "terok_shield.resources.shield_probe.probe",
-        MagicMock(side_effect=RuntimeError("boom")),
+    assert (
+        _run_main(
+            monkeypatch,
+            ["shield_probe.py", TEST_IP1],
+            probe_mock=MagicMock(side_effect=RuntimeError("boom")),
+        )
+        == 1
     )
-    assert main() == 1
     assert json.loads(capsys.readouterr().out)["error"] == "boom"
 
 

@@ -16,6 +16,11 @@ from ..testnet import TEST_IP1
 from .helpers import write_jsonl
 
 
+def _read_entry(path: Path) -> dict[str, str]:
+    """Read a single JSONL entry from *path*."""
+    return json.loads(path.read_text().strip())
+
+
 @pytest.fixture
 def make_logger(tmp_path: Path) -> Callable[..., AuditLogger]:
     """Create an AuditLogger rooted under the test temp directory."""
@@ -49,7 +54,7 @@ def test_log_event_writes_jsonl(make_logger: Callable[..., AuditLogger], tmp_pat
     path = tmp_path / "audit.jsonl"
     logger = make_logger(audit_path=path)
     logger.log_event("test-ctr", "setup", detail="test")
-    entry = json.loads(path.read_text().strip())
+    entry = _read_entry(path)
     assert entry["container"] == "test-ctr"
     assert entry["action"] == "setup"
     assert entry["detail"] == "test"
@@ -63,7 +68,7 @@ def test_log_event_omits_missing_optional_fields(
     path = tmp_path / "audit.jsonl"
     logger = make_logger(audit_path=path)
     logger.log_event("test-ctr", "denied", dest=TEST_IP1)
-    entry = json.loads(path.read_text().strip())
+    entry = _read_entry(path)
     assert entry["dest"] == TEST_IP1
     assert "detail" not in entry
 
