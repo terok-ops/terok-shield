@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -788,14 +787,14 @@ def test_parse_loopback_ports(raw: object, expected: tuple[int, ...]) -> None:
 
 def test_auto_detect_mode_raises_without_nft(monkeypatch: pytest.MonkeyPatch) -> None:
     """_auto_detect_mode() fails when nft is unavailable."""
-    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setattr("terok_shield.run.find_nft", lambda: "")
     with pytest.raises(RuntimeError):
         _auto_detect_mode()
 
 
 def test_auto_detect_mode_returns_hook(monkeypatch: pytest.MonkeyPatch) -> None:
     """_auto_detect_mode() selects hook mode when nft is installed."""
-    monkeypatch.setattr(shutil, "which", lambda name: NFT_BINARY if name == "nft" else None)
+    monkeypatch.setattr("terok_shield.run.find_nft", lambda: NFT_BINARY)
     assert _auto_detect_mode() == ShieldMode.HOOK
 
 
