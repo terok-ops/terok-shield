@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from terok_shield.run import find_nft
 from tests.testnet import ALLOWED_TARGET_IPS
 
 from .helpers import start_shielded_container
@@ -60,7 +61,7 @@ def _image_available() -> bool:
 # that gracefully degrade when binaries are absent.
 
 podman_missing = pytest.mark.skipif(not _has("podman"), reason="podman not installed")
-nft_missing = pytest.mark.skipif(not _has("nft"), reason="nft not installed")
+nft_missing = pytest.mark.skipif(not find_nft(), reason="nft not installed")
 dig_missing = pytest.mark.skipif(not _has("dig"), reason="dig not installed")
 
 
@@ -131,7 +132,7 @@ def nft_in_netns(_pull_image: None, _verify_connectivity: None) -> None:
     nft inside a container-owned netns via nsenter, where the user
     namespace *does* have CAP_NET_ADMIN.
     """
-    if not _has("podman") or not _has("nft"):
+    if not _has("podman") or not find_nft():
         pytest.skip("podman or nft not installed")
     name = f"{CTR_PREFIX}-nftcheck"
     subprocess.run(["podman", "rm", "-f", name], capture_output=True)

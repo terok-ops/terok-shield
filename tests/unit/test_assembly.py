@@ -195,7 +195,8 @@ def test_shield_up_reads_live_allowed(
     harness.ruleset.add_elements_dual.assert_called_once_with([TEST_IP1, TEST_IP2])
 
 
-def test_shield_constructs_real_collaborators(tmp_path: Path) -> None:
+@mock.patch("terok_shield.run.find_nft", return_value="/usr/bin/nft")
+def test_shield_constructs_real_collaborators(_find: mock.Mock, tmp_path: Path) -> None:
     """Shield(ShieldConfig(...)) wires the default real collaborators."""
     shield = Shield(ShieldConfig(state_dir=tmp_path))
     assert isinstance(shield.audit, AuditLogger)
@@ -204,13 +205,15 @@ def test_shield_constructs_real_collaborators(tmp_path: Path) -> None:
     assert isinstance(shield.ruleset, RulesetBuilder)
 
 
-def test_shield_audit_path_derived_from_state_dir(tmp_path: Path) -> None:
+@mock.patch("terok_shield.run.find_nft", return_value="/usr/bin/nft")
+def test_shield_audit_path_derived_from_state_dir(_find: mock.Mock, tmp_path: Path) -> None:
     """Shield's AuditLogger writes to state_dir/audit.jsonl."""
     shield = Shield(ShieldConfig(state_dir=tmp_path))
     assert shield.audit._audit_path == state.audit_path(tmp_path)
 
 
-def test_shield_resolve_uses_profile_allowed_path(tmp_path: Path) -> None:
+@mock.patch("terok_shield.run.find_nft", return_value="/usr/bin/nft")
+def test_shield_resolve_uses_profile_allowed_path(_find: mock.Mock, tmp_path: Path) -> None:
     """Shield.resolve() caches resolved entries in state_dir/profile.allowed."""
     dns = mock.MagicMock()
     dns.resolve_and_cache.return_value = [TEST_IP1]

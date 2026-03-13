@@ -12,7 +12,25 @@ from __future__ import annotations
 import ipaddress as _ipaddress
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+_SBIN_DIRS = ("/usr/sbin", "/sbin")
+
+
+def find_nft() -> str:
+    """Locate the nft binary, checking PATH then common sbin directories.
+
+    Returns the absolute path as a string, or empty string if not found.
+    """
+    found = shutil.which("nft")
+    if found:
+        return found
+    for d in _SBIN_DIRS:
+        candidate = Path(d) / "nft"
+        if candidate.is_file():
+            return str(candidate)
+    return ""
 
 
 class ExecError(Exception):
@@ -82,8 +100,20 @@ class CommandRunner(Protocol):
 class SubprocessRunner:
     """Default ``CommandRunner`` implementation using ``subprocess.run``.
 
-    Stateless -- all methods delegate to the standard library.
+    Resolves the nft binary path at construction time and raises
+    ``RuntimeError`` immediately if nft is not installed.
     """
+
+    def __init__(self) -> None:
+        """Resolve the nft binary path, raising RuntimeError if missing."""
+        self._nft = find_nft()
+        if not self._nft:
+            raise RuntimeError(
+                "nft binary not found. Install nftables:\n"
+                "  Debian/Ubuntu: sudo apt install nftables\n"
+                "  Fedora/RHEL:   sudo dnf install nftables\n"
+                "  Arch:          sudo pacman -S nftables"
+            )
 
     def run(
         self,
@@ -121,8 +151,8 @@ class SubprocessRunner:
     def nft(self, *args: str, stdin: str | None = None, check: bool = True) -> str:
         """Run nft command directly (hook mode, inside container netns)."""
         if stdin is not None:
-            return self.run(["nft", *args, "-f", "-"], stdin=stdin, check=check)
-        return self.run(["nft", *args], check=check)
+            return self.run([self._nft, *args, "-f", "-"], stdin=stdin, check=check)
+        return self.run([self._nft, *args], check=check)
 
     def nft_via_nsenter(
         self,
@@ -135,7 +165,7 @@ class SubprocessRunner:
         """Run nft inside a running container's network namespace."""
         if pid is None:
             pid = self.podman_inspect(container, "{{.State.Pid}}")
-        cmd = ["podman", "unshare", "nsenter", "-t", pid, "-n", "nft"]
+        cmd = ["podman", "unshare", "nsenter", "-t", pid, "-n", self._nft]
         if stdin is not None:
             return self.run([*cmd, *args, "-f", "-"], stdin=stdin, check=check)
         return self.run([*cmd, *args], check=check)

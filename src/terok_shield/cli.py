@@ -66,9 +66,9 @@ def _auto_detect_mode() -> ShieldMode:
     Raises:
         RuntimeError: If no supported shield mode is available.
     """
-    import shutil
+    from .run import find_nft
 
-    if shutil.which("nft"):
+    if find_nft():
         return ShieldMode.HOOK
 
     raise RuntimeError("No supported shield mode available. Install nft for hook mode.")

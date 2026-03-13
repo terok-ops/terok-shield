@@ -52,8 +52,8 @@ make docs             # serve documentation locally
 make test    # runs tests/unit/ with coverage
 ```
 
-Unit tests mock all subprocess calls and filesystem access. No network, no
-containers.
+Unit tests mock all subprocess calls. Filesystem access uses real temp
+directories (`tmp_path`). No network, no containers.
 
 ### Integration tests
 

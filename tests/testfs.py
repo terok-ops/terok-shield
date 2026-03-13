@@ -47,6 +47,7 @@ STATE_DIR_WITH_SPACES = "/path/with spaces/dir"
 # ── Binary paths (for mocking shutil.which results) ──
 
 NFT_BINARY = "/usr/bin/nft"
+NFT_SBIN = "/usr/sbin/nft"
 
 # ── Well-known terok-shield path segments used in tests ──
 

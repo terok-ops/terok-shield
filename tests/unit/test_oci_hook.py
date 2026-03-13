@@ -87,6 +87,7 @@ def hook_main_harness(monkeypatch: pytest.MonkeyPatch) -> HookMainHarness:
     monkeypatch.setattr("terok_shield.oci_hook.HookExecutor", executor_cls)
     monkeypatch.setattr("terok_shield.oci_hook.AuditLogger", audit_cls)
     monkeypatch.setattr("terok_shield.oci_hook.RulesetBuilder", ruleset_builder_cls)
+    monkeypatch.setattr("terok_shield.oci_hook.SubprocessRunner", mock.MagicMock)
     return HookMainHarness(
         executor_cls=executor_cls,
         audit_cls=audit_cls,

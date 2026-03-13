@@ -10,9 +10,9 @@ from unittest import mock
 
 import pytest
 
-from terok_shield.run import CommandRunner, ExecError, SubprocessRunner
+from terok_shield.run import CommandRunner, ExecError, SubprocessRunner, find_nft
 
-from ..testfs import NFT_BINARY
+from ..testfs import NFT_BINARY, NFT_SBIN
 from ..testnet import (
     ALIAS_DOMAIN,
     IPV6_CLOUDFLARE,
@@ -30,8 +30,9 @@ def _completed(*, rc: int = 0, stdout: str = "", stderr: str = "") -> mock.Mock:
 
 @pytest.fixture
 def runner() -> SubprocessRunner:
-    """Return a fresh subprocess runner."""
-    return SubprocessRunner()
+    """Return a fresh subprocess runner with a mocked nft path."""
+    with mock.patch("terok_shield.run.find_nft", return_value=NFT_BINARY):
+        return SubprocessRunner()
 
 
 @pytest.fixture
@@ -166,16 +167,26 @@ def test_has_uses_shutil_which(
 @pytest.mark.parametrize(
     ("args", "stdin", "expected_cmd", "expected_input"),
     [
-        pytest.param(("list", "ruleset"), None, ["nft", "list", "ruleset"], None, id="args-only"),
+        pytest.param(
+            ("list", "ruleset"),
+            None,
+            [NFT_BINARY, "list", "ruleset"],
+            None,
+            id="args-only",
+        ),
         pytest.param(
             ("-c",),
             "table ip test {}",
-            ["nft", "-c", "-f", "-"],
+            [NFT_BINARY, "-c", "-f", "-"],
             "table ip test {}",
             id="stdin-with-extra-args",
         ),
         pytest.param(
-            (), "table ip test {}", ["nft", "-f", "-"], "table ip test {}", id="stdin-only"
+            (),
+            "table ip test {}",
+            [NFT_BINARY, "-f", "-"],
+            "table ip test {}",
+            id="stdin-only",
         ),
     ],
 )
@@ -314,3 +325,40 @@ def test_dig_all_uses_single_query(
     cmd = subprocess_run.call_args[0][0]
     assert "A" in cmd
     assert "AAAA" in cmd
+
+
+# ── find_nft tests ───────────────────────────────────────
+
+
+def test_find_nft_returns_path_from_which(monkeypatch: pytest.MonkeyPatch) -> None:
+    """find_nft() returns the PATH result when shutil.which succeeds."""
+    monkeypatch.setattr(shutil, "which", lambda _name: NFT_BINARY)
+    assert find_nft() == NFT_BINARY
+
+
+def test_find_nft_falls_back_to_sbin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """find_nft() checks /usr/sbin/nft when PATH lookup fails."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with mock.patch("terok_shield.run.Path.is_file", return_value=True):
+        assert find_nft() == NFT_SBIN
+
+
+def test_find_nft_returns_empty_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """find_nft() returns empty string when nft is not found anywhere."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with mock.patch("terok_shield.run.Path.is_file", return_value=False):
+        assert find_nft() == ""
+
+
+def test_subprocess_runner_raises_when_nft_missing() -> None:
+    """SubprocessRunner raises RuntimeError with install instructions when nft is missing."""
+    with mock.patch("terok_shield.run.find_nft", return_value=""):
+        with pytest.raises(RuntimeError, match="nft binary not found"):
+            SubprocessRunner()
+
+
+def test_subprocess_runner_stores_nft_path() -> None:
+    """SubprocessRunner stores the resolved nft path."""
+    with mock.patch("terok_shield.run.find_nft", return_value=NFT_SBIN):
+        runner = SubprocessRunner()
+    assert runner._nft == NFT_SBIN
