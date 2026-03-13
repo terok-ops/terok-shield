@@ -83,6 +83,8 @@ def test_hook_mode_stores_collaborators(
         ruleset=ruleset,
     )
 
+    # HookMode intentionally has no public collaborator accessors; this
+    # white-box test verifies constructor wiring directly.
     assert mode._config is config
     assert mode._runner is runner
     assert mode._audit is audit

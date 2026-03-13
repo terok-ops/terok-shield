@@ -5,12 +5,23 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypedDict, Unpack
 
 import pytest
 
-from terok_shield.config import ShieldConfig
+from terok_shield.config import ShieldConfig, ShieldMode
 
 from ..testfs import CONFIG_FILENAME, CONFIG_ROOT_NAME, STATE_ROOT_NAME
+
+
+class _ShieldConfigKwargs(TypedDict, total=False):
+    """Optional ``ShieldConfig`` kwargs accepted by ``make_config``."""
+
+    mode: ShieldMode
+    default_profiles: tuple[str, ...]
+    loopback_ports: tuple[int, ...]
+    audit_enabled: bool
+    profiles_dir: Path | None
 
 
 @pytest.fixture
@@ -63,7 +74,7 @@ def write_config(config_root: Path) -> Callable[[str], Path]:
 def make_config(state_dir: Path) -> Callable[..., ShieldConfig]:
     """Build ``ShieldConfig`` objects rooted in the test's temp state directory."""
 
-    def _make_config(**kwargs: object) -> ShieldConfig:
+    def _make_config(**kwargs: Unpack[_ShieldConfigKwargs]) -> ShieldConfig:
         return ShieldConfig(state_dir=state_dir, **kwargs)
 
     return _make_config
