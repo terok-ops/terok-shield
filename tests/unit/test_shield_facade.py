@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from terok_shield import Shield, ShieldConfig, ShieldState
+from terok_shield import ExecError, Shield, ShieldConfig, ShieldState
 
 from ..testfs import NFT_BINARY
 from ..testnet import TEST_DOMAIN, TEST_IP1, TEST_IP2
@@ -215,7 +215,7 @@ def test_allow_and_deny_swallow_backend_exceptions(
 ) -> None:
     """allow()/deny() are best-effort when backend IP operations fail."""
     harness = make_shield()
-    getattr(harness.mode, backend_method).side_effect = RuntimeError("nft failed")
+    getattr(harness.mode, backend_method).side_effect = ExecError(["nft"], 1, "nft failed")
     assert getattr(harness.shield, method)("test-ctr", target) == []
 
 

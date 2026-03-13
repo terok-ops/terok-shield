@@ -129,12 +129,15 @@ class SubprocessRunner:
     ) -> str:
         """Run a command, return stdout.  Raise ExecError on failure when check=True."""
         try:
+            # All external commands flow through this boundary as explicit argv
+            # lists with ``shell=False`` so call sites stay auditable and testable.
             r = subprocess.run(
                 cmd,
                 input=stdin,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                shell=False,  # nosec B603
             )
         except FileNotFoundError as e:
             if check:

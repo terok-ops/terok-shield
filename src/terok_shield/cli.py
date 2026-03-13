@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import sys
 from pathlib import Path
 
@@ -361,6 +362,16 @@ _SHIELD_MANAGED_FLAGS = frozenset(
 )
 
 
+def _find_podman() -> str:
+    """Locate the podman binary for the ``run`` subcommand."""
+    found = shutil.which("podman")
+    if found:
+        resolved = Path(found).resolve()
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
+    raise OSError("podman binary not found. Install Podman to use 'terok-shield run'.")
+
+
 def _reject_shield_managed_flags(podman_args: list[str]) -> None:
     """Reject podman flags that conflict with shield-managed configuration."""
     conflicts: set[str] = set()
@@ -390,9 +401,12 @@ def _cmd_run(
 
     _reject_shield_managed_flags(podman_args)
 
+    podman = _find_podman()
     shield_args = shield.pre_start(container, profiles)
-    argv = ["podman", "run", "--name", container, *shield_args, *podman_args]
-    os.execvp("podman", argv)
+    argv = [podman, "run", "--name", container, *shield_args, *podman_args]
+    # Exec replaces the current process; argv is constructed locally and uses
+    # an absolute podman path, so shell injection and PATH spoofing do not apply.
+    os.execv(podman, argv)  # nosec B606
 
 
 def _cmd_resolve(shield: Shield, container: str, force: bool) -> None:
