@@ -4,148 +4,141 @@
 """Tests for the AuditLogger class."""
 
 import json
-import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 from terok_shield.audit import AuditLogger
 
 from ..testfs import NONEXISTENT_DIR
 from ..testnet import TEST_IP1
+from .helpers import write_jsonl
 
 
-class TestAuditLoggerInit:
-    """Test AuditLogger construction."""
+@pytest.fixture
+def make_logger(tmp_path: Path) -> Callable[..., AuditLogger]:
+    """Create an AuditLogger rooted under the test temp directory."""
 
-    def test_direct_init(self) -> None:
-        """Construct with explicit audit_path and enabled flag."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            logger = AuditLogger(audit_path=path, enabled=False)
-            assert not logger.enabled
+    def _make_logger(*, audit_path: Path | None = None, enabled: bool = True) -> AuditLogger:
+        return AuditLogger(audit_path=audit_path or tmp_path / "audit.jsonl", enabled=enabled)
 
-    def test_default_enabled(self) -> None:
-        """Default enabled is True."""
-        with tempfile.TemporaryDirectory() as tmp:
-            logger = AuditLogger(audit_path=Path(tmp) / "audit.jsonl")
-            assert logger.enabled
+    return _make_logger
 
 
-class TestAuditLoggerEnabledToggle:
-    """Test enabled property and setter."""
-
-    def test_toggle_enabled(self) -> None:
-        """Can toggle enabled on and off."""
-        with tempfile.TemporaryDirectory() as tmp:
-            logger = AuditLogger(audit_path=Path(tmp) / "audit.jsonl", enabled=True)
-            assert logger.enabled
-            logger.enabled = False
-            assert not logger.enabled
-            logger.enabled = True
-            assert logger.enabled
+@pytest.mark.parametrize(
+    "enabled", [pytest.param(False, id="disabled"), pytest.param(True, id="default-enabled")]
+)
+def test_audit_logger_init(make_logger: Callable[..., AuditLogger], enabled: bool) -> None:
+    """Construction preserves the enabled flag."""
+    logger = make_logger(enabled=enabled)
+    assert logger.enabled is enabled
 
 
-class TestAuditLoggerLogEvent:
-    """Test AuditLogger.log_event()."""
-
-    def test_writes_jsonl(self) -> None:
-        """Write a JSON-lines audit event."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            logger = AuditLogger(audit_path=path)
-            logger.log_event("test-ctr", "setup", detail="test")
-
-            assert path.exists()
-            entry = json.loads(path.read_text().strip())
-            assert entry["container"] == "test-ctr"
-            assert entry["action"] == "setup"
-            assert entry["detail"] == "test"
-            assert "ts" in entry
-
-    def test_optional_fields(self) -> None:
-        """Only include optional fields when provided."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            logger = AuditLogger(audit_path=path)
-            logger.log_event("test-ctr", "denied", dest=TEST_IP1)
-
-            entry = json.loads(path.read_text().strip())
-            assert entry["dest"] == TEST_IP1
-            assert "detail" not in entry
-
-    def test_skips_when_disabled(self) -> None:
-        """No file written when disabled."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            logger = AuditLogger(audit_path=path, enabled=False)
-            logger.log_event("test-ctr", "setup", detail="test")
-            assert not path.exists()
-
-    @mock.patch("pathlib.Path.open", side_effect=OSError("disk full"))
-    def test_silently_ignores_write_error(self, _open: mock.Mock) -> None:
-        """OSError during write is silently ignored."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            logger = AuditLogger(audit_path=path)
-            # Should not raise
-            logger.log_event("test-ctr", "setup")
-
-    def test_multiple_events_appended(self) -> None:
-        """Multiple events append to the same file."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            logger = AuditLogger(audit_path=path)
-            logger.log_event("test-ctr", "setup")
-            logger.log_event("test-ctr", "allowed", dest=TEST_IP1)
-
-            lines = path.read_text().strip().split("\n")
-            assert len(lines) == 2
-
-    def test_creates_parent_dirs(self) -> None:
-        """log_event creates parent directories if needed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "subdir" / "audit.jsonl"
-            logger = AuditLogger(audit_path=path)
-            logger.log_event("test-ctr", "setup")
-            assert path.exists()
+def test_audit_logger_enabled_toggle(make_logger: Callable[..., AuditLogger]) -> None:
+    """The enabled property can be toggled after construction."""
+    logger = make_logger(enabled=True)
+    logger.enabled = False
+    assert not logger.enabled
+    logger.enabled = True
+    assert logger.enabled
 
 
-class TestAuditLoggerTailLog:
-    """Test AuditLogger.tail_log()."""
+def test_log_event_writes_jsonl(make_logger: Callable[..., AuditLogger], tmp_path: Path) -> None:
+    """log_event() appends a JSONL audit record."""
+    path = tmp_path / "audit.jsonl"
+    logger = make_logger(audit_path=path)
+    logger.log_event("test-ctr", "setup", detail="test")
+    entry = json.loads(path.read_text().strip())
+    assert entry["container"] == "test-ctr"
+    assert entry["action"] == "setup"
+    assert entry["detail"] == "test"
+    assert "ts" in entry
 
-    def test_returns_last_n_entries(self) -> None:
-        """Return the last N audit events."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            entries = [json.dumps({"action": f"event-{i}"}) for i in range(5)]
-            path.write_text("\n".join(entries) + "\n")
-            logger = AuditLogger(audit_path=path)
 
-            result = list(logger.tail_log(n=3))
-            assert len(result) == 3
-            assert result[0]["action"] == "event-2"
+def test_log_event_omits_missing_optional_fields(
+    make_logger: Callable[..., AuditLogger], tmp_path: Path
+) -> None:
+    """Optional event fields are only included when provided."""
+    path = tmp_path / "audit.jsonl"
+    logger = make_logger(audit_path=path)
+    logger.log_event("test-ctr", "denied", dest=TEST_IP1)
+    entry = json.loads(path.read_text().strip())
+    assert entry["dest"] == TEST_IP1
+    assert "detail" not in entry
 
-    def test_skips_corrupt_lines(self) -> None:
-        """Skip corrupt JSON lines and yield valid ones."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            path.write_text('{"action":"good"}\nnot-json\n{"action":"also-good"}\n')
-            logger = AuditLogger(audit_path=path)
 
-            result = list(logger.tail_log())
-            assert len(result) == 2
+def test_log_event_skips_writes_when_disabled(
+    make_logger: Callable[..., AuditLogger], tmp_path: Path
+) -> None:
+    """Disabled loggers do not create or append log files."""
+    path = tmp_path / "audit.jsonl"
+    make_logger(audit_path=path, enabled=False).log_event("test-ctr", "setup", detail="test")
+    assert not path.exists()
 
-    def test_missing_file(self) -> None:
-        """Return empty for missing log files."""
-        logger = AuditLogger(audit_path=NONEXISTENT_DIR / "audit.jsonl")
-        result = list(logger.tail_log())
-        assert result == []
 
-    def test_n_zero_returns_nothing(self) -> None:
-        """n=0 yields no events."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "audit.jsonl"
-            path.write_text('{"action":"a"}\n')
-            logger = AuditLogger(audit_path=path)
-            result = list(logger.tail_log(n=0))
-            assert result == []
+@mock.patch("pathlib.Path.open", side_effect=OSError("disk full"))
+def test_log_event_ignores_write_errors(
+    _open: mock.Mock,
+    make_logger: Callable[..., AuditLogger],
+    tmp_path: Path,
+) -> None:
+    """Write failures are swallowed to avoid breaking protected workloads."""
+    make_logger(audit_path=tmp_path / "audit.jsonl").log_event("test-ctr", "setup")
+
+
+def test_log_event_appends_multiple_events(
+    make_logger: Callable[..., AuditLogger], tmp_path: Path
+) -> None:
+    """Multiple events append to the same file."""
+    path = tmp_path / "audit.jsonl"
+    logger = make_logger(audit_path=path)
+    logger.log_event("test-ctr", "setup")
+    logger.log_event("test-ctr", "allowed", dest=TEST_IP1)
+    assert len(path.read_text().strip().splitlines()) == 2
+
+
+def test_log_event_creates_parent_dirs(
+    make_logger: Callable[..., AuditLogger], tmp_path: Path
+) -> None:
+    """log_event() creates missing parent directories as needed."""
+    path = tmp_path / "subdir" / "audit.jsonl"
+    make_logger(audit_path=path).log_event("test-ctr", "setup")
+    assert path.exists()
+
+
+@pytest.mark.parametrize(
+    ("entries", "n", "expected_actions"),
+    [
+        pytest.param(
+            [{"action": f"event-{index}"} for index in range(5)],
+            3,
+            ["event-2", "event-3", "event-4"],
+            id="last-n",
+        ),
+        pytest.param(
+            ['{"action":"good"}', "not-json", '{"action":"also-good"}'],
+            50,
+            ["good", "also-good"],
+            id="skips-corrupt-lines",
+        ),
+        pytest.param([{"action": "a"}], 0, [], id="n-zero"),
+    ],
+)
+def test_tail_log_reads_recent_entries(
+    make_logger: Callable[..., AuditLogger],
+    tmp_path: Path,
+    entries: list[dict[str, str] | str],
+    n: int,
+    expected_actions: list[str],
+) -> None:
+    """tail_log() returns recent valid JSON entries in order."""
+    path = write_jsonl(tmp_path / "audit.jsonl", entries)
+    result = list(make_logger(audit_path=path).tail_log(n=n))
+    assert [entry["action"] for entry in result] == expected_actions
+
+
+def test_tail_log_returns_empty_for_missing_file() -> None:
+    """tail_log() yields nothing when the audit file does not exist."""
+    assert list(AuditLogger(audit_path=NONEXISTENT_DIR / "audit.jsonl").tail_log()) == []

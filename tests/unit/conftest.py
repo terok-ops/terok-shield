@@ -18,6 +18,46 @@ def state_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def state_root(tmp_path: Path) -> Path:
+    """Return a dedicated state root directory for CLI-style tests."""
+    root = tmp_path / "state"
+    root.mkdir()
+    return root
+
+
+@pytest.fixture
+def config_root(tmp_path: Path) -> Path:
+    """Return a dedicated config root directory for CLI-style tests."""
+    root = tmp_path / "config"
+    root.mkdir()
+    return root
+
+
+@pytest.fixture
+def isolated_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    state_root: Path,
+    config_root: Path,
+) -> tuple[Path, Path]:
+    """Point CLI env resolution at isolated per-test config and state roots."""
+    monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", str(state_root))
+    monkeypatch.setenv("TEROK_SHIELD_CONFIG_DIR", str(config_root))
+    return state_root, config_root
+
+
+@pytest.fixture
+def write_config(config_root: Path) -> Callable[[str], Path]:
+    """Write ``config.yml`` under the isolated config root and return its path."""
+
+    def _write_config(text: str) -> Path:
+        config_file = config_root / "config.yml"
+        config_file.write_text(text)
+        return config_file
+
+    return _write_config
+
+
+@pytest.fixture
 def make_config(state_dir: Path) -> Callable[..., ShieldConfig]:
     """Build ``ShieldConfig`` objects rooted in the test's temp state directory."""
 

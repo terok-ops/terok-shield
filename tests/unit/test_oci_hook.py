@@ -3,8 +3,9 @@
 
 """Tests for OCI hook entry point."""
 
+import ipaddress
 import json
-import tempfile
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -36,287 +37,242 @@ def _oci_state(
     annotations: dict[str, str] | None = None,
 ) -> str:
     """Return a minimal OCI state JSON string."""
-    oci: dict = {"id": cid, "pid": pid}
+    oci: dict[str, object] = {"id": cid, "pid": pid}
     if annotations is not None:
         oci["annotations"] = annotations
     return json.dumps(oci)
 
 
-def _valid_annotations(state_dir: str) -> dict[str, str]:
-    """Return annotations with required fields for hook_main."""
+def _valid_annotations(state_dir: Path) -> dict[str, str]:
+    """Return annotations with the fields required by hook_main()."""
     return {
         ANNOTATION_KEY: "dev-standard",
         ANNOTATION_NAME_KEY: "my-ctr",
-        "terok.shield.state_dir": state_dir,
+        "terok.shield.state_dir": str(state_dir),
         "terok.shield.loopback_ports": "1234",
         "terok.shield.version": str(state.BUNDLE_VERSION),
     }
 
 
-class TestClassifyCidr:
-    """Tests for _classify_cidr helper."""
-
-    def test_private_v4(self) -> None:
-        """RFC1918 network is classified as private."""
-        import ipaddress
-
-        is_private, is_broad = _classify_cidr(ipaddress.ip_network(RFC1918_CIDR_10))
-        assert is_private
-        assert is_broad
-
-    def test_public_v4(self) -> None:
-        """Public network is not private."""
-        import ipaddress
-
-        is_private, is_broad = _classify_cidr(ipaddress.ip_network(BLOCKED_TARGET_NET))
-        assert not is_private
-        assert not is_broad
-
-    def test_narrow_cidr_not_broad(self) -> None:
-        """Narrow CIDR is not classified as broad."""
-        import ipaddress
-
-        _, is_broad = _classify_cidr(ipaddress.ip_network(RFC1918_CIDR_192))
-        assert not is_broad
-
-    def test_private_v6(self) -> None:
-        """ULA IPv6 network is classified as private."""
-        import ipaddress
-
-        is_private, _ = _classify_cidr(ipaddress.ip_network(IPV6_ULA_CIDR))
-        assert is_private
+@pytest.mark.parametrize(
+    ("network", "expected_private", "expected_broad"),
+    [
+        pytest.param(RFC1918_CIDR_10, True, True, id="private-broad-ipv4"),
+        pytest.param(BLOCKED_TARGET_NET, False, False, id="public-ipv4"),
+        pytest.param(RFC1918_CIDR_192, True, False, id="private-narrow-ipv4"),
+        pytest.param(IPV6_ULA_CIDR, True, True, id="private-broad-ipv6"),
+    ],
+)
+def test_classify_cidr(network: str, expected_private: bool, expected_broad: bool) -> None:
+    """_classify_cidr() identifies private and broad networks."""
+    assert _classify_cidr(ipaddress.ip_network(network)) == (expected_private, expected_broad)
 
 
-class TestIsPrivateAddr:
-    """Tests for _is_private_addr helper."""
-
-    def test_rfc1918_is_private(self) -> None:
-        """RFC1918 address is private."""
-        import ipaddress
-
-        assert _is_private_addr(ipaddress.ip_address(RFC1918_HOST))
-
-    def test_public_is_not_private(self) -> None:
-        """Public address is not private."""
-        import ipaddress
-
-        assert not _is_private_addr(ipaddress.ip_address(BLOCKED_TARGET_IP))
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        pytest.param(RFC1918_HOST, True, id="private"),
+        pytest.param(BLOCKED_TARGET_IP, False, id="public"),
+    ],
+)
+def test_is_private_addr(address: str, expected: bool) -> None:
+    """_is_private_addr() detects private versus public addresses."""
+    assert _is_private_addr(ipaddress.ip_address(address)) is expected
 
 
-class TestCheckPrivateRanges:
-    """Tests for _classify_ips classification."""
-
-    def test_mixed_ips(self) -> None:
-        """Classifies mix of private and public IPs."""
-        private, broad = _classify_ips([RFC1918_HOST, BLOCKED_TARGET_IP])
-        assert RFC1918_HOST in private
-        assert BLOCKED_TARGET_IP not in private
-        assert broad == []
-
-    def test_broad_cidr(self) -> None:
-        """Broad CIDR is flagged."""
-        private, broad = _classify_ips([RFC1918_CIDR_10])
-        assert RFC1918_CIDR_10 in broad
-        assert RFC1918_CIDR_10 in private
-
-    def test_invalid_ip_skipped(self) -> None:
-        """Invalid IP strings are silently skipped."""
-        private, broad = _classify_ips(["not-an-ip", BLOCKED_TARGET_IP])
-        assert private == []
-        assert broad == []
+@pytest.mark.parametrize(
+    ("ips", "expected_private", "expected_broad"),
+    [
+        pytest.param([RFC1918_HOST, BLOCKED_TARGET_IP], [RFC1918_HOST], [], id="mixed-addresses"),
+        pytest.param([RFC1918_CIDR_10], [RFC1918_CIDR_10], [RFC1918_CIDR_10], id="broad-cidr"),
+        pytest.param(["not-an-ip", BLOCKED_TARGET_IP], [], [], id="invalid-input-skipped"),
+    ],
+)
+def test_classify_ips(
+    ips: list[str],
+    expected_private: list[str],
+    expected_broad: list[str],
+) -> None:
+    """_classify_ips() classifies private ranges and broad CIDRs for logging."""
+    assert _classify_ips(ips) == (expected_private, expected_broad)
 
 
-class TestParseLoopbackPortsAnnotation:
-    """Tests for _parse_loopback_ports (annotation string version)."""
-
-    def test_valid_ports(self) -> None:
-        """Comma-separated port string is parsed."""
-        assert _parse_loopback_ports("8080,9090") == (8080, 9090)
-
-    def test_empty_string(self) -> None:
-        """Empty string returns empty tuple."""
-        assert _parse_loopback_ports("") == ()
-
-    def test_invalid_port_skipped(self) -> None:
-        """Non-integer port values are skipped."""
-        assert _parse_loopback_ports("8080,bad,9090") == (8080, 9090)
-
-    def test_out_of_range_skipped(self) -> None:
-        """Out-of-range ports are skipped."""
-        assert _parse_loopback_ports("0,8080,99999") == (8080,)
-
-    def test_whitespace_handled(self) -> None:
-        """Whitespace around ports is stripped."""
-        assert _parse_loopback_ports(" 8080 , 9090 ") == (8080, 9090)
-
-    def test_trailing_comma(self) -> None:
-        """Trailing comma produces no extra entry."""
-        assert _parse_loopback_ports("8080,") == (8080,)
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param("8080,9090", (8080, 9090), id="valid-ports"),
+        pytest.param("", (), id="empty"),
+        pytest.param("8080,bad,9090", (8080, 9090), id="invalid-skipped"),
+        pytest.param("0,8080,99999", (8080,), id="range-checked"),
+        pytest.param(" 8080 , 9090 ", (8080, 9090), id="whitespace-trimmed"),
+        pytest.param("8080,", (8080,), id="trailing-comma"),
+    ],
+)
+def test_parse_loopback_ports(raw: str, expected: tuple[int, ...]) -> None:
+    """_parse_loopback_ports() parses annotation strings defensively."""
+    assert _parse_loopback_ports(raw) == expected
 
 
-class TestParseOciState:
-    """Tests for _parse_oci_state."""
-
-    def test_valid_state(self) -> None:
-        """Parse valid OCI state."""
-        cid, pid, annotations = _parse_oci_state(_oci_state("mycontainer", 1234))
-        assert cid == "mycontainer"
-        assert pid == "1234"
-        assert annotations == {}
-
-    def test_with_annotations(self) -> None:
-        """Parse state with annotations."""
-        ann = {ANNOTATION_KEY: "dev-standard", ANNOTATION_NAME_KEY: "my-ctr"}
-        _, _, annotations = _parse_oci_state(_oci_state("abc", 1, annotations=ann))
-        assert annotations[ANNOTATION_KEY] == "dev-standard"
-        assert annotations[ANNOTATION_NAME_KEY] == "my-ctr"
-
-    def test_missing_id(self) -> None:
-        """Raise ValueError for missing id."""
-        with pytest.raises(ValueError):
-            _parse_oci_state(json.dumps({"pid": 42}))
-
-    def test_missing_pid_returns_empty(self) -> None:
-        """Return empty pid string when pid is absent (poststop)."""
-        cid, pid, _ = _parse_oci_state(json.dumps({"id": "abc"}))
-        assert cid == "abc"
-        assert pid == ""
-
-    def test_zero_pid_returns_empty(self) -> None:
-        """Return empty pid string when pid is zero (poststop)."""
-        cid, pid, _ = _parse_oci_state(json.dumps({"id": "abc", "pid": 0}))
-        assert cid == "abc"
-        assert pid == ""
-
-    def test_invalid_json(self) -> None:
-        """Raise ValueError for invalid JSON."""
-        with pytest.raises(ValueError):
-            _parse_oci_state("not json")
-
-    def test_empty_id(self) -> None:
-        """Raise ValueError for empty id."""
-        with pytest.raises(ValueError):
-            _parse_oci_state(json.dumps({"id": "", "pid": 42}))
-
-    def test_non_object_json(self) -> None:
-        """Raise ValueError for valid JSON that is not an object."""
-        for value in ["[]", '"string"', "123", "true"]:
-            with pytest.raises(ValueError):
-                _parse_oci_state(value)
-
-    def test_non_dict_annotations_ignored(self) -> None:
-        """Non-dict annotations are treated as empty."""
-        _, _, annotations = _parse_oci_state(
-            json.dumps({"id": "abc", "pid": 1, "annotations": "not-a-dict"})
-        )
-        assert annotations == {}
-
-    def test_annotation_values_normalized_to_str(self) -> None:
-        """Non-string annotation values are coerced to strings."""
-        _, _, annotations = _parse_oci_state(
-            json.dumps({"id": "abc", "pid": 1, "annotations": {"key": 42, "flag": True}})
-        )
-        assert annotations["key"] == "42"
-        assert annotations["flag"] == "True"
+def test_parse_oci_state_parses_valid_state() -> None:
+    """_parse_oci_state() returns container id, pid, and annotations."""
+    cid, pid, annotations = _parse_oci_state(_oci_state("mycontainer", 1234))
+    assert (cid, pid, annotations) == ("mycontainer", "1234", {})
 
 
-class TestHookMain:
-    """Tests for hook_main entry point."""
+@pytest.mark.parametrize(
+    ("stdin_data", "expected"),
+    [
+        pytest.param(
+            _oci_state(
+                "abc",
+                1,
+                annotations={ANNOTATION_KEY: "dev-standard", ANNOTATION_NAME_KEY: "my-ctr"},
+            ),
+            {ANNOTATION_KEY: "dev-standard", ANNOTATION_NAME_KEY: "my-ctr"},
+            id="with-annotations",
+        ),
+        pytest.param(
+            json.dumps({"id": "abc", "pid": 1, "annotations": "not-a-dict"}),
+            {},
+            id="non-dict-annotations-ignored",
+        ),
+        pytest.param(
+            json.dumps({"id": "abc", "pid": 1, "annotations": {"key": 42, "flag": True}}),
+            {"key": "42", "flag": "True"},
+            id="annotation-values-normalized-to-str",
+        ),
+    ],
+)
+def test_parse_oci_state_normalizes_annotations(
+    stdin_data: str,
+    expected: dict[str, str],
+) -> None:
+    """_parse_oci_state() keeps only stringified annotation mappings."""
+    _, _, annotations = _parse_oci_state(stdin_data)
+    assert annotations == expected
 
-    @mock.patch("terok_shield.oci_hook.HookExecutor")
-    def test_success(self, mock_exec: mock.Mock) -> None:
-        """Return 0 on success (hook mode createRuntime)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ann = _valid_annotations(tmp)
-            rc = hook_main(_oci_state("test-ctr", 42, annotations=ann))
-            assert rc == 0
-            mock_exec.return_value.apply.assert_called_once_with("test-ctr", "42")
 
-    def test_invalid_json(self) -> None:
-        """Return 1 on invalid OCI state."""
-        rc = hook_main("not json")
-        assert rc == 1
+@pytest.mark.parametrize(
+    ("stdin_data", "expected_message"),
+    [
+        pytest.param(json.dumps({"pid": 42}), "missing id", id="missing-id"),
+        pytest.param("not json", "Invalid OCI state JSON", id="invalid-json"),
+        pytest.param(json.dumps({"id": "", "pid": 42}), "missing id", id="empty-id"),
+        pytest.param("[]", "JSON object", id="non-object-list"),
+        pytest.param('"string"', "JSON object", id="non-object-string"),
+        pytest.param("123", "JSON object", id="non-object-number"),
+        pytest.param("true", "JSON object", id="non-object-bool"),
+    ],
+)
+def test_parse_oci_state_rejects_invalid_inputs(stdin_data: str, expected_message: str) -> None:
+    """_parse_oci_state() rejects malformed or incomplete OCI state payloads."""
+    with pytest.raises(ValueError, match=expected_message):
+        _parse_oci_state(stdin_data)
 
-    @mock.patch("terok_shield.oci_hook.HookExecutor")
-    def test_runtime_error(self, mock_exec: mock.Mock) -> None:
-        """Return 1 on RuntimeError from executor.apply."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ann = _valid_annotations(tmp)
-            mock_exec.return_value.apply.side_effect = RuntimeError("boom")
-            rc = hook_main(_oci_state(annotations=ann))
-            assert rc == 1
 
-    def test_hook_mode_requires_pid(self) -> None:
-        """Return 1 when hook mode state has no valid PID."""
-        rc = hook_main(json.dumps({"id": "abc", "pid": 0}))
-        assert rc == 1
+@pytest.mark.parametrize(
+    ("stdin_data", "expected_pid"),
+    [
+        pytest.param(json.dumps({"id": "abc"}), "", id="missing-pid"),
+        pytest.param(json.dumps({"id": "abc", "pid": 0}), "", id="zero-pid"),
+    ],
+)
+def test_parse_oci_state_normalizes_missing_or_zero_pid(
+    stdin_data: str,
+    expected_pid: str,
+) -> None:
+    """_parse_oci_state() returns an empty pid string for poststop-like payloads."""
+    cid, pid, _ = _parse_oci_state(stdin_data)
+    assert cid == "abc"
+    assert pid == expected_pid
 
-    def test_poststop_noop(self) -> None:
-        """Poststop is a no-op returning 0 without calling HookExecutor."""
-        oci = _oci_state(pid=0)
-        rc = hook_main(oci, stage="poststop")
-        assert rc == 0
 
-    def test_missing_state_dir_annotation(self) -> None:
-        """Return 1 when state_dir annotation is missing."""
-        ann = {ANNOTATION_KEY: "dev-standard"}
-        rc = hook_main(_oci_state(annotations=ann))
-        assert rc == 1
+@mock.patch("terok_shield.oci_hook.HookExecutor")
+def test_hook_main_success(mock_exec: mock.Mock, tmp_path: Path) -> None:
+    """hook_main() returns 0 and applies the ruleset on valid createRuntime input."""
+    rc = hook_main(_oci_state("test-ctr", 42, annotations=_valid_annotations(tmp_path)))
+    assert rc == 0
+    mock_exec.return_value.apply.assert_called_once_with("test-ctr", "42")
 
-    def test_version_mismatch(self) -> None:
-        """Return 1 when bundle version doesn't match."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ann = _valid_annotations(tmp)
-            ann["terok.shield.version"] = "999"
-            rc = hook_main(_oci_state(annotations=ann))
-            assert rc == 1
 
-    def test_invalid_version(self) -> None:
-        """Return 1 when version annotation is not a valid integer."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ann = _valid_annotations(tmp)
-            ann["terok.shield.version"] = "not-a-number"
-            rc = hook_main(_oci_state(annotations=ann))
-            assert rc == 1
+def test_hook_main_returns_1_for_invalid_json() -> None:
+    """hook_main() fails closed when OCI state is invalid JSON."""
+    assert hook_main("not json") == 1
 
-    def test_relative_state_dir_rejected(self) -> None:
-        """Return 1 when state_dir annotation is a relative path."""
-        ann = {
-            ANNOTATION_KEY: "dev-standard",
-            ANNOTATION_NAME_KEY: "my-ctr",
-            "terok.shield.state_dir": "relative/path",
-            "terok.shield.loopback_ports": "",
-            "terok.shield.version": str(state.BUNDLE_VERSION),
-        }
-        rc = hook_main(_oci_state(annotations=ann))
-        assert rc == 1
 
-    @mock.patch("terok_shield.oci_hook.HookExecutor")
-    @mock.patch("terok_shield.oci_hook.AuditLogger")
-    def test_audit_disabled_annotation(
-        self, mock_audit_cls: mock.Mock, mock_exec: mock.Mock
-    ) -> None:
-        """audit_enabled=false annotation is honored by hook_main."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ann = _valid_annotations(tmp)
-            ann["terok.shield.audit_enabled"] = "false"
-            rc = hook_main(_oci_state(annotations=ann))
-            assert rc == 0
-            mock_audit_cls.assert_called_once()
-            _, kwargs = mock_audit_cls.call_args
-            assert not kwargs["enabled"]
+@mock.patch("terok_shield.oci_hook.HookExecutor")
+def test_hook_main_returns_1_on_executor_runtime_error(
+    mock_exec: mock.Mock,
+    tmp_path: Path,
+) -> None:
+    """hook_main() returns 1 when executor.apply() fails."""
+    mock_exec.return_value.apply.side_effect = RuntimeError("boom")
+    assert hook_main(_oci_state(annotations=_valid_annotations(tmp_path))) == 1
 
-    @mock.patch("terok_shield.oci_hook.HookExecutor")
-    @mock.patch("terok_shield.oci_hook.AuditLogger")
-    def test_malformed_audit_enabled_defaults_to_on(
-        self, mock_audit_cls: mock.Mock, mock_exec: mock.Mock
-    ) -> None:
-        """Malformed audit_enabled value defaults to enabled (safe)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            ann = _valid_annotations(tmp)
-            ann["terok.shield.audit_enabled"] = "garbled"
-            rc = hook_main(_oci_state(annotations=ann))
-            assert rc == 0
-            mock_audit_cls.assert_called_once()
-            _, kwargs = mock_audit_cls.call_args
-            assert kwargs["enabled"]
+
+@pytest.mark.parametrize(
+    ("stdin_data", "stage", "expected"),
+    [
+        pytest.param(
+            json.dumps({"id": "abc", "pid": 0}), "createRuntime", 1, id="hook-mode-requires-pid"
+        ),
+        pytest.param(_oci_state(pid=0), "poststop", 0, id="poststop-noop"),
+    ],
+)
+def test_hook_main_handles_pid_requirements(stdin_data: str, stage: str, expected: int) -> None:
+    """hook_main() requires a PID only for createRuntime hooks."""
+    assert hook_main(stdin_data, stage=stage) == expected
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        pytest.param(lambda ann: ann.pop("terok.shield.state_dir"), 1, id="missing-state-dir"),
+        pytest.param(
+            lambda ann: ann.__setitem__("terok.shield.version", "999"), 1, id="version-mismatch"
+        ),
+        pytest.param(
+            lambda ann: ann.__setitem__("terok.shield.version", "not-a-number"),
+            1,
+            id="invalid-version",
+        ),
+        pytest.param(
+            lambda ann: ann.__setitem__("terok.shield.state_dir", "relative/path"),
+            1,
+            id="relative-state-dir",
+        ),
+    ],
+)
+def test_hook_main_rejects_invalid_annotations(
+    tmp_path: Path,
+    mutate: callable,
+    expected: int,
+) -> None:
+    """hook_main() fails closed when required annotations are missing or invalid."""
+    annotations = _valid_annotations(tmp_path)
+    mutate(annotations)
+    assert hook_main(_oci_state(annotations=annotations)) == expected
+
+
+@mock.patch("terok_shield.oci_hook.HookExecutor")
+@mock.patch("terok_shield.oci_hook.AuditLogger")
+@pytest.mark.parametrize(
+    ("audit_value", "expected_enabled"),
+    [
+        pytest.param("false", False, id="audit-disabled"),
+        pytest.param("garbled", True, id="malformed-audit-defaults-on"),
+    ],
+)
+def test_hook_main_configures_audit_logger_from_annotation(
+    mock_audit_cls: mock.Mock,
+    _mock_exec: mock.Mock,
+    tmp_path: Path,
+    audit_value: str,
+    expected_enabled: bool,
+) -> None:
+    """hook_main() interprets the audit_enabled annotation safely."""
+    annotations = _valid_annotations(tmp_path)
+    annotations["terok.shield.audit_enabled"] = audit_value
+    assert hook_main(_oci_state(annotations=annotations)) == 0
+    _, kwargs = mock_audit_cls.call_args
+    assert kwargs["enabled"] is expected_enabled

@@ -4,7 +4,7 @@
 """Tests for the HookExecutor class."""
 
 import json
-import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -15,315 +15,253 @@ from terok_shield.oci_hook import HookExecutor
 from terok_shield.run import ExecError
 
 from ..testnet import RFC1918_HOST, TEST_IP1, TEST_IP2
+from .helpers import write_lines
 
 
-class TestHookExecutorInit:
-    """Test HookExecutor construction."""
+@pytest.fixture
+def make_executor(
+    tmp_path: Path,
+) -> Callable[..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]]:
+    """Create a HookExecutor plus its default mock collaborators."""
 
-    def test_stores_collaborators(self) -> None:
-        """HookExecutor stores all injected collaborators."""
-        runner = mock.MagicMock()
-        audit = mock.MagicMock()
-        ruleset = mock.MagicMock()
+    def _make_executor(
+        *,
+        runner: mock.MagicMock | None = None,
+        audit: mock.MagicMock | None = None,
+        ruleset: mock.MagicMock | None = None,
+        state_dir: Path | None = None,
+    ) -> tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]:
+        runner = runner or mock.MagicMock()
+        audit = audit or mock.MagicMock()
+        ruleset = ruleset or mock.MagicMock()
+        executor = HookExecutor(
+            runner=runner,
+            audit=audit,
+            ruleset=ruleset,
+            state_dir=state_dir or tmp_path,
+        )
+        return executor, runner, audit, ruleset
 
-        with tempfile.TemporaryDirectory() as tmp:
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            assert executor._runner is runner
-            assert executor._audit is audit
-            assert executor._ruleset is ruleset
-            assert executor._state_dir == Path(tmp)
-
-
-class TestHookExecutorApply:
-    """Test HookExecutor.apply()."""
-
-    def test_success_no_ips(self) -> None:
-        """Apply with no pre-resolved IPs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ["", "valid list output"]
-            audit = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook ruleset"
-            ruleset.verify_hook.return_value = []
-            ruleset.add_elements_dual.return_value = ""
-
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            executor.apply("test-ctr", "42")
-
-            # verify calls: apply + list for verify
-            assert runner.nft_via_nsenter.call_count == 2
-            # audit trail
-            details = [c.kwargs.get("detail", "") for c in audit.log_event.call_args_list]
-            assert "ruleset applied" in details
-            assert "verification passed" in details
-
-    def test_success_with_ips(self) -> None:
-        """Apply with pre-resolved IPs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ["", "", "valid list output"]
-            audit = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-            ruleset.verify_hook.return_value = []
-            ruleset.add_elements_dual.return_value = f"add element allow_v4 {{ {TEST_IP1} }}"
-
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            executor.apply("test-ctr", "42")
-            assert runner.nft_via_nsenter.call_count == 3
-
-    def test_fail_closed_on_apply_error(self) -> None:
-        """Raise RuntimeError and short-circuit if ruleset application fails."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "permission denied")
-            audit = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            with pytest.raises(RuntimeError):
-                executor.apply("test-ctr", "42")
-
-            # Verify short-circuit: nft called once (apply), verify never reached
-            runner.nft_via_nsenter.assert_called_once()
-            ruleset.verify_hook.assert_not_called()
-
-    def test_fail_closed_on_verify_error(self) -> None:
-        """Raise RuntimeError if verification fails."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ["", "bad output"]
-            audit = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-            ruleset.verify_hook.return_value = ["policy is not drop"]
-
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            with pytest.raises(RuntimeError) as ctx:
-                executor.apply("test-ctr", "42")
-            assert "verification failed" in str(ctx.value)
+    return _make_executor
 
 
-class TestHookExecutorReadAllowedIps:
-    """Test HookExecutor._read_allowed_ips()."""
-
-    def test_reads_profile_allowed(self) -> None:
-        """Read IPs from profile.allowed file."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-            executor = _make_executor(state_dir=Path(tmp))
-            result = executor._read_allowed_ips()
-            assert result == [TEST_IP1, TEST_IP2]
-
-    def test_reads_both_files(self) -> None:
-        """Read and merge IPs from both profile.allowed and live.allowed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n")
-            state.live_allowed_path(Path(tmp)).write_text(f"{TEST_IP2}\n")
-            executor = _make_executor(state_dir=Path(tmp))
-            result = executor._read_allowed_ips()
-            assert result == [TEST_IP1, TEST_IP2]
-
-    def test_deduplicates(self) -> None:
-        """Duplicate IPs across files are deduplicated."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n")
-            state.live_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-            executor = _make_executor(state_dir=Path(tmp))
-            result = executor._read_allowed_ips()
-            assert result == [TEST_IP1, TEST_IP2]
-
-    def test_missing_files(self) -> None:
-        """Return empty list when no allowlist files exist."""
-        with tempfile.TemporaryDirectory() as tmp:
-            executor = _make_executor(state_dir=Path(tmp))
-            result = executor._read_allowed_ips()
-            assert result == []
-
-    def test_skips_blank_lines(self) -> None:
-        """Skip blank lines in allowlist files."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"\n{TEST_IP1}\n\n")
-            executor = _make_executor(state_dir=Path(tmp))
-            result = executor._read_allowed_ips()
-            assert result == [TEST_IP1]
-
-    def test_subtracts_denied_ips(self) -> None:
-        """Denied IPs from deny.list are excluded from the result."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-            state.deny_path(Path(tmp)).write_text(f"{TEST_IP1}\n")
-            executor = _make_executor(state_dir=Path(tmp))
-            result = executor._read_allowed_ips()
-            assert result == [TEST_IP2]
-
-
-class TestHookExecutorNftExec:
-    """Test HookExecutor._nft_exec()."""
-
-    def test_success(self) -> None:
-        """nft_exec returns output on success."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.return_value = "output"
-        executor = _make_executor(runner=runner)
-
-        result = executor._nft_exec("test-ctr", "42", "list", "ruleset")
-        assert result == "output"
-
-    def test_exec_error_raises_runtime(self) -> None:
-        """nft_exec converts ExecError to RuntimeError."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "fail")
-        audit = mock.MagicMock()
-        executor = _make_executor(runner=runner, audit=audit)
-
-        with pytest.raises(RuntimeError) as ctx:
-            executor._nft_exec("test-ctr", "42", "list", "ruleset")
-        assert "list failed" in str(ctx.value)
-        audit.log_event.assert_called()
-
-    def test_custom_action_label(self) -> None:
-        """nft_exec uses custom action label in error messages."""
-        runner = mock.MagicMock()
-        runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "fail")
-        audit = mock.MagicMock()
-        executor = _make_executor(runner=runner, audit=audit)
-
-        with pytest.raises(RuntimeError) as ctx:
-            executor._nft_exec("test-ctr", "42", stdin="rules", action="add-elements")
-        assert "add-elements failed" in str(ctx.value)
-
-
-class TestHookExecutorParseOciState:
-    """Test HookExecutor.parse_oci_state() static method."""
-
-    def test_valid_state(self) -> None:
-        """Parse valid OCI state via the class method."""
-        cid, pid, _ = HookExecutor.parse_oci_state(json.dumps({"id": "abc123", "pid": 42}))
-        assert cid == "abc123"
-        assert pid == "42"
-
-    def test_invalid_json_raises(self) -> None:
-        """Raise ValueError for invalid JSON."""
-        with pytest.raises(ValueError):
-            HookExecutor.parse_oci_state("not json")
-
-
-class TestHookExecutorClassifyLogging:
-    """Test private-range and broad CIDR classification logging in HookExecutor."""
-
-    def test_rfc1918_logged_as_note(self) -> None:
-        """RFC1918 IPs produce a 'note' log entry."""
-        with tempfile.TemporaryDirectory() as tmp:
-            state.profile_allowed_path(Path(tmp)).write_text(f"{RFC1918_HOST}\n")
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.side_effect = ["", "", "valid"]
-            audit = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-            ruleset.verify_hook.return_value = []
-            ruleset.add_elements_dual.return_value = "add element"
-
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            executor.apply("test-ctr", "42")
-
-            note_calls = [
-                c for c in audit.log_event.call_args_list if len(c[0]) >= 2 and c[0][1] == "note"
-            ]
-            assert any("private range" in c.kwargs.get("detail", "") for c in note_calls)
-
-
-class TestHookExecutorCacheReadError:
-    """Test fail-closed on cache read error."""
-
-    def test_oserror_raises_runtime(self) -> None:
-        """OSError reading resolved cache raises RuntimeError."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.return_value = ""
-            audit = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            with mock.patch.object(executor, "_read_allowed_ips", side_effect=OSError("disk fail")):
-                with pytest.raises(RuntimeError):
-                    executor.apply("test-ctr", "42")
-
-    def test_unicodeerror_raises_runtime(self) -> None:
-        """UnicodeError reading resolved cache raises RuntimeError."""
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.return_value = ""
-            audit = mock.MagicMock()
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "hook"
-
-            executor = HookExecutor(
-                runner=runner,
-                audit=audit,
-                ruleset=ruleset,
-                state_dir=Path(tmp),
-            )
-            with mock.patch.object(
-                executor, "_read_allowed_ips", side_effect=UnicodeError("bad encoding")
-            ):
-                with pytest.raises(RuntimeError):
-                    executor.apply("test-ctr", "42")
-
-
-# ── Helper ──────────────────────────────────────────────
-
-
-def _make_executor(
-    *,
-    runner: mock.MagicMock | None = None,
-    audit: mock.MagicMock | None = None,
-    ruleset: mock.MagicMock | None = None,
-    state_dir: Path | None = None,
-) -> HookExecutor:
-    """Create a HookExecutor with mock collaborators."""
-    return HookExecutor(
-        runner=runner or mock.MagicMock(),
-        audit=audit or mock.MagicMock(),
-        ruleset=ruleset or mock.MagicMock(),
-        state_dir=state_dir or Path(tempfile.mkdtemp()),
+def test_hook_executor_stores_collaborators(
+    tmp_path: Path,
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+) -> None:
+    """Construction keeps the injected collaborators and state dir."""
+    runner = mock.MagicMock()
+    audit = mock.MagicMock()
+    ruleset = mock.MagicMock()
+    executor, _, _, _ = make_executor(
+        runner=runner,
+        audit=audit,
+        ruleset=ruleset,
+        state_dir=tmp_path,
     )
+    assert executor._runner is runner
+    assert executor._audit is audit
+    assert executor._ruleset is ruleset
+    assert executor._state_dir == tmp_path
+
+
+@pytest.mark.parametrize(
+    ("allowed_ips", "nft_side_effect", "add_elements", "expected_calls"),
+    [
+        pytest.param([], ["", "valid list output"], "", 2, id="no-pre-resolved-ips"),
+        pytest.param(
+            [TEST_IP1, TEST_IP2],
+            ["", "", "valid list output"],
+            f"add element allow_v4 {{ {TEST_IP1} }}",
+            3,
+            id="with-pre-resolved-ips",
+        ),
+    ],
+)
+def test_apply_successfully_applies_ruleset_and_verifies(
+    tmp_path: Path,
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+    allowed_ips: list[str],
+    nft_side_effect: list[str],
+    add_elements: str,
+    expected_calls: int,
+) -> None:
+    """apply() installs the hook ruleset, optional allow-set elements, and verifies."""
+    if allowed_ips:
+        write_lines(state.profile_allowed_path(tmp_path), allowed_ips)
+
+    executor, runner, audit, ruleset = make_executor(state_dir=tmp_path)
+    runner.nft_via_nsenter.side_effect = nft_side_effect
+    ruleset.build_hook.return_value = "hook ruleset"
+    ruleset.verify_hook.return_value = []
+    ruleset.add_elements_dual.return_value = add_elements
+
+    executor.apply("test-ctr", "42")
+
+    assert runner.nft_via_nsenter.call_count == expected_calls
+    details = [call.kwargs.get("detail", "") for call in audit.log_event.call_args_list]
+    assert "ruleset applied" in details
+    assert "verification passed" in details
+    assert f"applied with {len(allowed_ips)} allowed IPs" in details
+
+
+def test_apply_fails_closed_on_ruleset_apply_error(
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+) -> None:
+    """apply() short-circuits when nft rejects the hook ruleset."""
+    executor, runner, _, ruleset = make_executor()
+    runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "permission denied")
+    ruleset.build_hook.return_value = "hook"
+
+    with pytest.raises(RuntimeError):
+        executor.apply("test-ctr", "42")
+
+    runner.nft_via_nsenter.assert_called_once()
+    ruleset.verify_hook.assert_not_called()
+
+
+def test_apply_fails_closed_on_verification_error(
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+) -> None:
+    """apply() raises RuntimeError when verification finds ruleset errors."""
+    executor, runner, _, ruleset = make_executor()
+    runner.nft_via_nsenter.side_effect = ["", "bad output"]
+    ruleset.build_hook.return_value = "hook"
+    ruleset.verify_hook.return_value = ["policy is not drop"]
+
+    with pytest.raises(RuntimeError, match="verification failed"):
+        executor.apply("test-ctr", "42")
+
+
+@pytest.mark.parametrize(
+    ("profile_lines", "live_lines", "deny_lines", "expected"),
+    [
+        pytest.param([TEST_IP1, TEST_IP2], [], [], [TEST_IP1, TEST_IP2], id="profile-only"),
+        pytest.param([TEST_IP1], [TEST_IP2], [], [TEST_IP1, TEST_IP2], id="profile-and-live"),
+        pytest.param([TEST_IP1], [TEST_IP1, TEST_IP2], [], [TEST_IP1, TEST_IP2], id="deduplicates"),
+        pytest.param([], [], [], [], id="missing-files"),
+        pytest.param(["", TEST_IP1, ""], [], [], [TEST_IP1], id="skips-blank-lines"),
+        pytest.param([TEST_IP1, TEST_IP2], [], [TEST_IP1], [TEST_IP2], id="subtracts-denied"),
+    ],
+)
+def test_read_allowed_ips_merges_allowlists(
+    tmp_path: Path,
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+    profile_lines: list[str],
+    live_lines: list[str],
+    deny_lines: list[str],
+    expected: list[str],
+) -> None:
+    """_read_allowed_ips() returns the effective allowlist from state files."""
+    if profile_lines:
+        write_lines(state.profile_allowed_path(tmp_path), profile_lines)
+    if live_lines:
+        write_lines(state.live_allowed_path(tmp_path), live_lines)
+    if deny_lines:
+        write_lines(state.deny_path(tmp_path), deny_lines)
+
+    executor, _, _, _ = make_executor(state_dir=tmp_path)
+    assert executor._read_allowed_ips() == expected
+
+
+def test_nft_exec_returns_runner_output(
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+) -> None:
+    """_nft_exec() returns the runner output on success."""
+    executor, runner, _, _ = make_executor(runner=mock.MagicMock())
+    runner.nft_via_nsenter.return_value = "output"
+    assert executor._nft_exec("test-ctr", "42", "list", "ruleset") == "output"
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_message"),
+    [
+        pytest.param("", "list failed", id="default-action-label"),
+        pytest.param("add-elements", "add-elements failed", id="custom-action-label"),
+    ],
+)
+def test_nft_exec_converts_exec_error_to_runtime_error(
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+    action: str,
+    expected_message: str,
+) -> None:
+    """_nft_exec() logs and re-raises runner failures as RuntimeError."""
+    audit = mock.MagicMock()
+    executor, runner, _, _ = make_executor(runner=mock.MagicMock(), audit=audit)
+    runner.nft_via_nsenter.side_effect = ExecError(["nft"], 1, "fail")
+
+    kwargs = {"stdin": "rules", "action": action} if action else {}
+    args = () if action else ("list", "ruleset")
+    with pytest.raises(RuntimeError, match=expected_message):
+        executor._nft_exec("test-ctr", "42", *args, **kwargs)
+    audit.log_event.assert_called()
+
+
+def test_parse_oci_state_returns_container_and_pid() -> None:
+    """parse_oci_state() exposes the static parser for valid OCI JSON."""
+    cid, pid, annotations = HookExecutor.parse_oci_state(json.dumps({"id": "abc123", "pid": 42}))
+    assert (cid, pid, annotations) == ("abc123", "42", {})
+
+
+def test_parse_oci_state_rejects_invalid_json() -> None:
+    """parse_oci_state() raises ValueError for malformed JSON."""
+    with pytest.raises(ValueError):
+        HookExecutor.parse_oci_state("not json")
+
+
+def test_apply_logs_private_ranges_as_notes(
+    tmp_path: Path,
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+) -> None:
+    """Private-range IPs are logged as notes during apply()."""
+    write_lines(state.profile_allowed_path(tmp_path), [RFC1918_HOST])
+
+    executor, runner, audit, ruleset = make_executor(state_dir=tmp_path)
+    runner.nft_via_nsenter.side_effect = ["", "", "valid"]
+    ruleset.build_hook.return_value = "hook"
+    ruleset.verify_hook.return_value = []
+    ruleset.add_elements_dual.return_value = "add element"
+
+    executor.apply("test-ctr", "42")
+
+    note_calls = [call for call in audit.log_event.call_args_list if call.args[1] == "note"]
+    assert any("private range" in call.kwargs.get("detail", "") for call in note_calls)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(OSError("disk fail"), id="oserror"),
+        pytest.param(UnicodeError("bad encoding"), id="unicodeerror"),
+    ],
+)
+def test_apply_fails_closed_when_reading_cached_ips_fails(
+    make_executor: Callable[
+        ..., tuple[HookExecutor, mock.MagicMock, mock.MagicMock, mock.MagicMock]
+    ],
+    error: Exception,
+) -> None:
+    """Cache read failures are converted into RuntimeError before nft verification."""
+    executor, runner, _, ruleset = make_executor(runner=mock.MagicMock())
+    runner.nft_via_nsenter.return_value = ""
+    ruleset.build_hook.return_value = "hook"
+
+    with mock.patch.object(executor, "_read_allowed_ips", side_effect=error):
+        with pytest.raises(RuntimeError):
+            executor.apply("test-ctr", "42")

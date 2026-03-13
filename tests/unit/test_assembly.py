@@ -7,15 +7,9 @@ These tests exercise real constructor signatures, collaborator wiring,
 and cross-module data flow — catching API contract regressions that
 integration tests would find only with podman/nft. No subprocess calls,
 no mocks (unless strictly needed for the runner layer).
-
-Each test class targets a specific contract boundary:
-- Constructor signatures (catches missing required args)
-- DnsResolver API (catches resolve_and_cache signature drift)
-- Allow/deny persistence (catches live.allowed data flow)
-- Shield+HookMode wiring (catches broken collaborator assembly)
 """
 
-import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -30,253 +24,191 @@ from terok_shield.profiles import ProfileLoader
 
 from ..testfs import FAKE_RESOLVED_DIR
 from ..testnet import TEST_DOMAIN, TEST_IP1, TEST_IP2
+from .helpers import write_lines
 
 _AUDIT_LOG_FILENAME = "audit.jsonl"
 _PROFILE_ALLOWED_FILENAME = "profile.allowed"
 
 
-class TestConstructorContracts:
-    """Verify constructor signatures accept the documented parameters.
+@pytest.fixture
+def make_hook_mode(tmp_path: Path) -> Callable[..., HookMode]:
+    """Create a HookMode wired with real config and mock collaborators."""
 
-    Catches regressions like ShieldConfig() without state_dir or
-    DnsResolver(resolved_dir=...) after API changes.
-    """
+    def _make_hook_mode(
+        *,
+        state_dir: Path | None = None,
+        runner: mock.MagicMock | None = None,
+        ruleset: mock.MagicMock | None = None,
+    ) -> HookMode:
+        state_dir = state_dir or tmp_path
+        state.ensure_state_dirs(state_dir)
+        return HookMode(
+            config=ShieldConfig(state_dir=state_dir),
+            runner=runner or mock.MagicMock(),
+            audit=mock.MagicMock(),
+            dns=mock.MagicMock(),
+            profiles=mock.MagicMock(),
+            ruleset=ruleset or mock.MagicMock(),
+        )
 
-    def test_shield_config_requires_state_dir(self) -> None:
-        """ShieldConfig() without state_dir raises TypeError."""
-        with pytest.raises(TypeError):
-            ShieldConfig()  # type: ignore[call-arg]
-
-    def test_shield_config_accepts_state_dir(self) -> None:
-        """ShieldConfig(state_dir=...) constructs successfully."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = ShieldConfig(state_dir=Path(tmp))
-            assert config.state_dir == Path(tmp)
-
-    def test_dns_resolver_stateless_constructor(self) -> None:
-        """DnsResolver takes only runner=, not resolved_dir."""
-        runner = mock.MagicMock()
-        resolver = DnsResolver(runner=runner)
-        assert resolver._runner is runner
-
-    def test_dns_resolver_rejects_resolved_dir(self) -> None:
-        """DnsResolver does not accept resolved_dir kwarg."""
-        with pytest.raises(TypeError):
-            DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=mock.MagicMock())  # type: ignore[call-arg]
-
-    def test_audit_logger_accepts_audit_path(self) -> None:
-        """AuditLogger takes audit_path=, not log_dir."""
-        with tempfile.TemporaryDirectory() as tmp:
-            logger = AuditLogger(audit_path=Path(tmp) / _AUDIT_LOG_FILENAME)
-            assert isinstance(logger, AuditLogger)
-
-    def test_ruleset_builder_constructor(self) -> None:
-        """RulesetBuilder accepts loopback_ports."""
-        rb = RulesetBuilder(loopback_ports=(8080, 9090))
-        assert isinstance(rb, RulesetBuilder)
-
-    def test_profile_loader_constructor(self) -> None:
-        """ProfileLoader accepts user_dir."""
-        with tempfile.TemporaryDirectory() as tmp:
-            loader = ProfileLoader(user_dir=Path(tmp))
-            assert isinstance(loader, ProfileLoader)
+    return _make_hook_mode
 
 
-class TestDnsResolverCacheContract:
-    """Verify resolve_and_cache takes cache_path: Path, not container: str."""
-
-    def test_resolve_and_cache_accepts_path(self) -> None:
-        """resolve_and_cache(entries, cache_path) writes to the given path."""
-        runner = mock.MagicMock()
-        runner.dig_all.return_value = [TEST_IP1]
-        resolver = DnsResolver(runner=runner)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / _PROFILE_ALLOWED_FILENAME
-            ips = resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
-            assert TEST_IP1 in ips
-            assert cache_path.is_file()
-            assert TEST_IP1 in cache_path.read_text()
-
-    def test_resolve_and_cache_reads_from_cache(self) -> None:
-        """Second call with fresh cache skips DNS resolution."""
-        runner = mock.MagicMock()
-        runner.dig_all.return_value = [TEST_IP1]
-        resolver = DnsResolver(runner=runner)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / _PROFILE_ALLOWED_FILENAME
-            resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
-            runner.dig_all.reset_mock()
-
-            ips2 = resolver.resolve_and_cache([TEST_DOMAIN], cache_path, max_age=3600)
-            runner.dig_all.assert_not_called()
-            assert ips2 == [TEST_IP1]
+def test_shield_config_requires_state_dir() -> None:
+    """ShieldConfig() without state_dir raises TypeError."""
+    with pytest.raises(TypeError):
+        ShieldConfig()  # type: ignore[call-arg]
 
 
-class TestAllowDenyPersistence:
-    """Verify allow_ip() persists to live.allowed and shield_up() reads it back.
-
-    This catches the regression where test_allow_before_and_after_bypass
-    expected IPs to be lost after a bypass cycle, but they now survive
-    because allow_ip() writes to live.allowed.
-    """
-
-    def test_allow_ip_writes_to_live_allowed(self) -> None:
-        """allow_ip() appends the IP to live.allowed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            sd = Path(tmp)
-            state.ensure_state_dirs(sd)
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.return_value = ""
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-
-            hm = HookMode(
-                config=ShieldConfig(state_dir=sd),
-                runner=runner,
-                audit=mock.MagicMock(),
-                dns=mock.MagicMock(),
-                profiles=mock.MagicMock(),
-                ruleset=ruleset,
-            )
-
-            hm.allow_ip("test-ctr", TEST_IP1)
-
-            live_path = state.live_allowed_path(sd)
-            assert live_path.is_file()
-            assert TEST_IP1 in live_path.read_text()
-
-    def test_deny_ip_removes_from_live_allowed(self) -> None:
-        """deny_ip() removes the IP from live.allowed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            sd = Path(tmp)
-            state.ensure_state_dirs(sd)
-
-            # Pre-populate live.allowed
-            live_path = state.live_allowed_path(sd)
-            live_path.write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.return_value = ""
-            ruleset = mock.MagicMock()
-            ruleset.safe_ip.return_value = TEST_IP1
-
-            hm = HookMode(
-                config=ShieldConfig(state_dir=sd),
-                runner=runner,
-                audit=mock.MagicMock(),
-                dns=mock.MagicMock(),
-                profiles=mock.MagicMock(),
-                ruleset=ruleset,
-            )
-
-            hm.deny_ip("test-ctr", TEST_IP1)
-
-            content = live_path.read_text()
-            assert TEST_IP1 not in content
-            assert TEST_IP2 in content
-
-    def test_read_allowed_ips_merges_both_files(self) -> None:
-        """state.read_allowed_ips() merges profile.allowed + live.allowed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            sd = Path(tmp)
-            state.ensure_state_dirs(sd)
-
-            state.profile_allowed_path(sd).write_text(f"{TEST_IP1}\n")
-            state.live_allowed_path(sd).write_text(f"{TEST_IP2}\n")
-
-            ips = state.read_allowed_ips(sd)
-            assert ips == [TEST_IP1, TEST_IP2]
-
-    def test_read_allowed_ips_deduplicates(self) -> None:
-        """Duplicate IPs across files are deduplicated (first wins)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            sd = Path(tmp)
-            state.ensure_state_dirs(sd)
-
-            state.profile_allowed_path(sd).write_text(f"{TEST_IP1}\n")
-            state.live_allowed_path(sd).write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-
-            ips = state.read_allowed_ips(sd)
-            assert ips == [TEST_IP1, TEST_IP2]
-
-    def test_shield_up_reads_live_allowed(self) -> None:
-        """shield_up() re-adds IPs from live.allowed via state.read_allowed_ips().
-
-        This is the exact scenario that broke the integration test:
-        allow_ip() writes to live.allowed, shield_up() reads it back.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            sd = Path(tmp)
-            state.ensure_state_dirs(sd)
-
-            # Simulate allow_ip() having written to live.allowed
-            state.live_allowed_path(sd).write_text(f"{TEST_IP1}\n{TEST_IP2}\n")
-
-            runner = mock.MagicMock()
-            runner.nft_via_nsenter.return_value = ""
-            ruleset = mock.MagicMock()
-            ruleset.build_hook.return_value = "table inet terok_shield {}"
-            ruleset.add_elements_dual.return_value = "add element ..."
-            ruleset.verify_hook.return_value = []  # no errors
-
-            hm = HookMode(
-                config=ShieldConfig(state_dir=sd),
-                runner=runner,
-                audit=mock.MagicMock(),
-                dns=mock.MagicMock(),
-                profiles=mock.MagicMock(),
-                ruleset=ruleset,
-            )
-
-            hm.shield_up("test-ctr")
-
-            # Verify add_elements_dual was called with the IPs from live.allowed
-            ruleset.add_elements_dual.assert_called_once_with([TEST_IP1, TEST_IP2])
+def test_shield_config_accepts_state_dir(tmp_path: Path) -> None:
+    """ShieldConfig(state_dir=...) constructs successfully."""
+    assert ShieldConfig(state_dir=tmp_path).state_dir == tmp_path
 
 
-class TestShieldAssembly:
-    """Verify Shield wires real collaborators from ShieldConfig.
+def test_dns_resolver_stateless_constructor() -> None:
+    """DnsResolver takes only runner=, not resolved_dir."""
+    runner = mock.MagicMock()
+    assert DnsResolver(runner=runner)._runner is runner
 
-    Catches regressions where Shield.__init__ fails because
-    collaborator constructors changed signatures.
-    """
 
-    def test_shield_constructs_with_real_collaborators(self) -> None:
-        """Shield(ShieldConfig(state_dir=...)) wires all real collaborators."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config = ShieldConfig(state_dir=Path(tmp))
-            shield = Shield(config)
+def test_dns_resolver_rejects_resolved_dir() -> None:
+    """DnsResolver does not accept resolved_dir kwarg."""
+    with pytest.raises(TypeError):
+        DnsResolver(resolved_dir=FAKE_RESOLVED_DIR, runner=mock.MagicMock())  # type: ignore[call-arg]
 
-            assert isinstance(shield.audit, AuditLogger)
-            assert isinstance(shield.dns, DnsResolver)
-            assert isinstance(shield.profiles, ProfileLoader)
-            assert isinstance(shield.ruleset, RulesetBuilder)
 
-    def test_shield_audit_path_derived_from_state_dir(self) -> None:
-        """Shield's AuditLogger writes to state_dir/audit.jsonl."""
-        with tempfile.TemporaryDirectory() as tmp:
-            sd = Path(tmp)
-            shield = Shield(ShieldConfig(state_dir=sd))
-            expected = state.audit_path(sd)
-            assert shield.audit._audit_path == expected
+def test_audit_logger_accepts_audit_path(tmp_path: Path) -> None:
+    """AuditLogger takes audit_path=, not log_dir."""
+    assert isinstance(AuditLogger(audit_path=tmp_path / _AUDIT_LOG_FILENAME), AuditLogger)
 
-    def test_shield_resolve_uses_profile_allowed_path(self) -> None:
-        """Shield.resolve() forwards entries and caches to state_dir/profile.allowed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            sd = Path(tmp)
-            dns = mock.MagicMock()
-            dns.resolve_and_cache.return_value = [TEST_IP1]
-            profiles = mock.MagicMock()
-            profiles.compose_profiles.return_value = [TEST_DOMAIN]
 
-            shield = Shield(ShieldConfig(state_dir=sd), dns=dns, profiles=profiles)
-            shield.resolve(["dev-standard"])
+def test_ruleset_builder_constructor() -> None:
+    """RulesetBuilder accepts loopback_ports."""
+    assert isinstance(RulesetBuilder(loopback_ports=(8080, 9090)), RulesetBuilder)
 
-            dns.resolve_and_cache.assert_called_once()
-            call_args = dns.resolve_and_cache.call_args
-            # First positional arg: composed entries
-            assert call_args[0][0] == [TEST_DOMAIN]
-            # Second positional arg: cache path
-            assert call_args[0][1] == state.profile_allowed_path(sd)
+
+def test_profile_loader_constructor(tmp_path: Path) -> None:
+    """ProfileLoader accepts user_dir."""
+    assert isinstance(ProfileLoader(user_dir=tmp_path), ProfileLoader)
+
+
+def test_resolve_and_cache_accepts_cache_path(tmp_path: Path) -> None:
+    """resolve_and_cache(entries, cache_path) writes to the given path."""
+    runner = mock.MagicMock()
+    runner.dig_all.return_value = [TEST_IP1]
+    resolver = DnsResolver(runner=runner)
+
+    cache_path = tmp_path / _PROFILE_ALLOWED_FILENAME
+    ips = resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
+    assert TEST_IP1 in ips
+    assert cache_path.is_file()
+    assert TEST_IP1 in cache_path.read_text()
+
+
+def test_resolve_and_cache_reuses_fresh_cache(tmp_path: Path) -> None:
+    """A fresh cache suppresses a second DNS lookup."""
+    runner = mock.MagicMock()
+    runner.dig_all.return_value = [TEST_IP1]
+    resolver = DnsResolver(runner=runner)
+    cache_path = tmp_path / _PROFILE_ALLOWED_FILENAME
+
+    resolver.resolve_and_cache([TEST_DOMAIN], cache_path)
+    runner.dig_all.reset_mock()
+    assert resolver.resolve_and_cache([TEST_DOMAIN], cache_path, max_age=3600) == [TEST_IP1]
+    runner.dig_all.assert_not_called()
+
+
+def test_allow_ip_writes_to_live_allowed(
+    make_hook_mode: Callable[..., HookMode], tmp_path: Path
+) -> None:
+    """allow_ip() persists live allowlist updates to live.allowed."""
+    runner = mock.MagicMock()
+    runner.nft_via_nsenter.return_value = ""
+    ruleset = mock.MagicMock()
+    ruleset.safe_ip.return_value = TEST_IP1
+
+    make_hook_mode(state_dir=tmp_path, runner=runner, ruleset=ruleset).allow_ip(
+        "test-ctr", TEST_IP1
+    )
+    assert TEST_IP1 in state.live_allowed_path(tmp_path).read_text()
+
+
+def test_deny_ip_removes_from_live_allowed(
+    make_hook_mode: Callable[..., HookMode], tmp_path: Path
+) -> None:
+    """deny_ip() removes the IP from live.allowed."""
+    live_path = write_lines(state.live_allowed_path(tmp_path), [TEST_IP1, TEST_IP2])
+    runner = mock.MagicMock()
+    runner.nft_via_nsenter.return_value = ""
+    ruleset = mock.MagicMock()
+    ruleset.safe_ip.return_value = TEST_IP1
+
+    make_hook_mode(state_dir=tmp_path, runner=runner, ruleset=ruleset).deny_ip("test-ctr", TEST_IP1)
+    content = live_path.read_text()
+    assert TEST_IP1 not in content
+    assert TEST_IP2 in content
+
+
+@pytest.mark.parametrize(
+    ("profile_lines", "live_lines", "expected"),
+    [
+        pytest.param([TEST_IP1], [TEST_IP2], [TEST_IP1, TEST_IP2], id="merges-both-files"),
+        pytest.param([TEST_IP1], [TEST_IP1, TEST_IP2], [TEST_IP1, TEST_IP2], id="deduplicates"),
+    ],
+)
+def test_read_allowed_ips_merges_state_files(
+    tmp_path: Path,
+    profile_lines: list[str],
+    live_lines: list[str],
+    expected: list[str],
+) -> None:
+    """state.read_allowed_ips() merges profile.allowed and live.allowed."""
+    state.ensure_state_dirs(tmp_path)
+    write_lines(state.profile_allowed_path(tmp_path), profile_lines)
+    write_lines(state.live_allowed_path(tmp_path), live_lines)
+    assert state.read_allowed_ips(tmp_path) == expected
+
+
+def test_shield_up_reads_live_allowed(
+    make_hook_mode: Callable[..., HookMode], tmp_path: Path
+) -> None:
+    """shield_up() re-adds persisted live.allowed IPs."""
+    write_lines(state.live_allowed_path(tmp_path), [TEST_IP1, TEST_IP2])
+    runner = mock.MagicMock()
+    runner.nft_via_nsenter.return_value = ""
+    ruleset = mock.MagicMock()
+    ruleset.build_hook.return_value = "table inet terok_shield {}"
+    ruleset.add_elements_dual.return_value = "add element ..."
+    ruleset.verify_hook.return_value = []
+
+    make_hook_mode(state_dir=tmp_path, runner=runner, ruleset=ruleset).shield_up("test-ctr")
+    ruleset.add_elements_dual.assert_called_once_with([TEST_IP1, TEST_IP2])
+
+
+def test_shield_constructs_real_collaborators(tmp_path: Path) -> None:
+    """Shield(ShieldConfig(...)) wires the default real collaborators."""
+    shield = Shield(ShieldConfig(state_dir=tmp_path))
+    assert isinstance(shield.audit, AuditLogger)
+    assert isinstance(shield.dns, DnsResolver)
+    assert isinstance(shield.profiles, ProfileLoader)
+    assert isinstance(shield.ruleset, RulesetBuilder)
+
+
+def test_shield_audit_path_derived_from_state_dir(tmp_path: Path) -> None:
+    """Shield's AuditLogger writes to state_dir/audit.jsonl."""
+    shield = Shield(ShieldConfig(state_dir=tmp_path))
+    assert shield.audit._audit_path == state.audit_path(tmp_path)
+
+
+def test_shield_resolve_uses_profile_allowed_path(tmp_path: Path) -> None:
+    """Shield.resolve() caches resolved entries in state_dir/profile.allowed."""
+    dns = mock.MagicMock()
+    dns.resolve_and_cache.return_value = [TEST_IP1]
+    profiles = mock.MagicMock()
+    profiles.compose_profiles.return_value = [TEST_DOMAIN]
+
+    Shield(ShieldConfig(state_dir=tmp_path), dns=dns, profiles=profiles).resolve(["dev-standard"])
+
+    args = dns.resolve_and_cache.call_args.args
+    assert args[0] == [TEST_DOMAIN]
+    assert args[1] == state.profile_allowed_path(tmp_path)
