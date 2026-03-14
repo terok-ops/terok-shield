@@ -30,12 +30,16 @@ from . import state
 from .audit import AuditLogger
 from .config import ShieldConfig, ShieldMode, ShieldState
 from .dns import DnsResolver
+from .mode_hook import setup_global_hooks
 from .nft import RulesetBuilder
 from .podman_info import (
+    USER_HOOKS_DIR,
+    ensure_containers_conf_hooks_dir,
     find_hooks_dirs,
     global_hooks_hint,
     has_global_hooks,
     parse_podman_info,
+    system_hooks_dir,
 )
 from .profiles import ProfileLoader
 from .run import CommandRunner, ExecError, NftNotFoundError, ShieldNeedsSetup, SubprocessRunner
@@ -300,4 +304,8 @@ __all__ = [
     "ShieldNeedsSetup",
     "ShieldState",
     "SubprocessRunner",
+    "USER_HOOKS_DIR",
+    "ensure_containers_conf_hooks_dir",
+    "setup_global_hooks",
+    "system_hooks_dir",
 ]
