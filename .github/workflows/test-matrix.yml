@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Jiri Vyskocil
+# SPDX-License-Identifier: Apache-2.0
+#
+# Multi-distro integration test matrix.
+# Requires a self-hosted runner with podman and --privileged support.
+# Will NOT work on GitHub-hosted runners (no nested containers).
+name: Test Matrix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  matrix:
+    if: github.repository == 'terok-ai/terok-shield'
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [debian12, ubuntu2404, debian13, fedora43]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run test matrix (${{ matrix.distro }})
+        run: ./tests/containers/run-matrix.sh ${{ matrix.distro }}
