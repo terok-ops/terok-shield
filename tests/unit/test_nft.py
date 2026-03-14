@@ -602,12 +602,14 @@ class TestGatewayPortRules:
         rs = hook_ruleset(dns=PASTA_DNS, loopback_ports=(9418,))
         assert f"daddr {SLIRP4NETNS_GATEWAY}" not in rs
 
-    def test_bypass_ruleset_includes_gateway_rule(self) -> None:
-        """bypass_ruleset() with gateway adds accept rule."""
+    def test_bypass_ruleset_includes_gateway_rule_before_private_range(self) -> None:
+        """bypass_ruleset() with gateway adds accept rule before private-range block."""
         rs = bypass_ruleset(
             dns=SLIRP4NETNS_DNS, loopback_ports=(9418,), gateway=SLIRP4NETNS_GATEWAY
         )
-        assert f"daddr {SLIRP4NETNS_GATEWAY} accept" in rs
+        gw_pos = rs.index(f"daddr {SLIRP4NETNS_GATEWAY} accept")
+        private_pos = rs.index(RFC1918[0])
+        assert gw_pos < private_pos
 
     def test_gateway_multiple_ports(self) -> None:
         """Gateway rule generated for each loopback port."""
