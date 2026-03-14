@@ -427,14 +427,12 @@ def test_run_and_separator_validation(
         pytest.param("--annotation", id="annotation"),
         pytest.param("--cap-add", id="cap-add"),
         pytest.param("--cap-drop", id="cap-drop"),
-        pytest.param("--security-opt", id="security-opt"),
         pytest.param("--network=host", id="network-equals"),
         pytest.param("--name=other", id="name-equals"),
         pytest.param("--annotation=a=b", id="annotation-equals"),
         pytest.param("--hooks-dir=/tmp", id="hooks-dir-equals"),
         pytest.param("--cap-add=NET_ADMIN", id="cap-add-equals"),
         pytest.param("--cap-drop=ALL", id="cap-drop-equals"),
-        pytest.param("--security-opt=no-new-privileges", id="security-opt-equals"),
     ],
 )
 def test_run_rejects_shield_managed_flags(

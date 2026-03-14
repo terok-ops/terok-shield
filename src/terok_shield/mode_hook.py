@@ -289,8 +289,6 @@ class HookMode:
             "NET_ADMIN",
             "--cap-drop",
             "NET_RAW",
-            "--security-opt",
-            "no-new-privileges",
         ]
         return args
 

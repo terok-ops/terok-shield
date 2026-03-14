@@ -372,7 +372,6 @@ _SHIELD_MANAGED_FLAGS = frozenset(
         "--annotation",
         "--cap-add",
         "--cap-drop",
-        "--security-opt",
     }
 )
 

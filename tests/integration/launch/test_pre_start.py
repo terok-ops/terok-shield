@@ -30,7 +30,6 @@ class TestShieldPreStart:
         assert "--hooks-dir" in args
         assert "--annotation" in args
         assert "--cap-drop" in args
-        assert "--security-opt" in args
 
     @pytest.mark.needs_internet
     def test_pre_start_resolves_dns(self, shield_env: Path) -> None:
