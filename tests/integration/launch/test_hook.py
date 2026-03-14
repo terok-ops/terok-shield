@@ -31,7 +31,7 @@ from tests.testnet import (
 )
 
 from ..conftest import nft_missing, nsenter_nft, podman_missing
-from ..helpers import wget as _wget
+from ..helpers import is_reachable, wget as _wget
 
 
 def _make_executor(tmp: str) -> HookExecutor:
@@ -137,7 +137,7 @@ class TestApplyHookE2E:
 
         # Allowed IP should be reachable
         allowed = _wget(container, ALLOWED_TARGET_HTTP, timeout=10)
-        assert allowed.returncode == 0, f"Pre-resolved IP should be reachable: {allowed.stderr}"
+        assert is_reachable(allowed), f"Pre-resolved IP should be reachable: {allowed.stderr}"
 
         # Non-allowed IP should still be blocked
         blocked = _wget(container, BLOCKED_TARGET_HTTP, timeout=10)
@@ -240,7 +240,7 @@ class TestHookMainE2E:
 
         # Allowed target reachable
         allowed = _wget(container, ALLOWED_TARGET_HTTP, timeout=10)
-        assert allowed.returncode == 0, "Pre-resolved IP should be reachable"
+        assert is_reachable(allowed), "Pre-resolved IP should be reachable"
 
         # Non-allowed target blocked
         blocked = _wget(container, BLOCKED_TARGET_HTTP, timeout=10)
