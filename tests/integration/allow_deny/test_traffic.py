@@ -19,7 +19,7 @@ from tests.testnet import (
 )
 
 from ..conftest import nft_missing, nsenter_nft, podman_missing
-from ..helpers import assert_blocked, assert_reachable, wget as _wget
+from ..helpers import assert_blocked, assert_reachable, is_reachable, wget as _wget
 
 # -- Low-level nft allow behavior -----------------------------
 
@@ -40,7 +40,7 @@ class TestFirewallAllowing:
         assert r.returncode == 0, f"Add elements failed: {r.stderr}"
 
         post = _wget(container, ALLOWED_TARGET_HTTP, timeout=10)
-        assert post.returncode == 0, f"Allowed IP should be reachable via HTTP: {post.stderr}"
+        assert is_reachable(post), f"Allowed IP should be reachable via HTTP: {post.stderr}"
 
     def test_allowed_ip_reachable_https(self, container: str, container_pid: str) -> None:
         """HTTPS traffic to an allowed IP is permitted."""
@@ -50,7 +50,7 @@ class TestFirewallAllowing:
         assert r.returncode == 0, f"Add elements failed: {r.stderr}"
 
         post = _wget(container, ALLOWED_TARGET_HTTPS, timeout=10)
-        assert post.returncode == 0, f"Allowed IP should be reachable via HTTPS: {post.stderr}"
+        assert is_reachable(post), f"Allowed IP should be reachable via HTTPS: {post.stderr}"
 
     def test_non_allowed_ip_still_blocked(self, container: str, container_pid: str) -> None:
         """IPs not in the allow set remain blocked after adding others."""
@@ -71,7 +71,7 @@ class TestFirewallAllowing:
 
         allowed = _wget(container, ALLOWED_TARGET_HTTP, timeout=10)
         blocked = _wget(container, BLOCKED_TARGET_HTTP, timeout=10)
-        assert allowed.returncode == 0, "Allowed IP should pass"
+        assert is_reachable(allowed), "Allowed IP should pass"
         assert blocked.returncode != 0, "Non-allowed IP should be rejected"
 
 

@@ -154,7 +154,14 @@ def wget(container: str, url: str, timeout: int = 5) -> subprocess.CompletedProc
         Completed process result.
     """
     return exec_in_container(
-        container, "wget", "-q", "--spider", f"--timeout={timeout}", url, timeout=timeout + 5
+        container,
+        "wget",
+        "-q",
+        "-O",
+        "/dev/null",
+        f"--timeout={timeout}",
+        url,
+        timeout=timeout + 5,
     )
 
 
@@ -192,10 +199,10 @@ def assert_blocked(container: str, url: str, timeout: int = 10) -> None:
 
 
 def assert_reachable(container: str, url: str, timeout: int = 10) -> None:
-    """Assert that a URL is reachable (wget succeeds) from inside a container.
+    """Assert that a URL is reachable from inside a container.
 
-    Verifies the container is running first to avoid misattributing
-    a dead container as a firewall block.
+    Delegates to :func:`is_reachable` which tolerates busybox wget
+    redirect failures (``bad address``) as proof of TCP connectivity.
 
     Args:
         container: Container name or ID.
@@ -204,7 +211,20 @@ def assert_reachable(container: str, url: str, timeout: int = 10) -> None:
     """
     _assert_container_running(container)
     r = wget(container, url, timeout=timeout)
-    assert r.returncode == 0, f"Expected {url} to be reachable, but it was blocked: {r.stderr}"
+    assert is_reachable(r), f"Expected {url} to be reachable, but it was blocked: {r.stderr}"
+
+
+def is_reachable(result: subprocess.CompletedProcess) -> bool:
+    """Check if a wget result indicates the target was reachable.
+
+    Returns True if wget succeeded, or if wget got an HTTP redirect
+    to a hostname it couldn't resolve (``bad address``).  The redirect
+    proves TCP connectivity was established — the DNS failure is
+    expected in shielded containers where only the forwarder is allowed.
+    """
+    if result.returncode == 0:
+        return True
+    return "bad address" in result.stderr
 
 
 def assert_ruleset_applied(container: str) -> None:
