@@ -149,8 +149,9 @@ def nft_in_netns(_pull_image: None, _verify_connectivity: None) -> None:
             text=True,
             timeout=10,
         ).stdout.strip()
+        nft_path = find_nft()
         r = subprocess.run(
-            ["podman", "unshare", "nsenter", "-t", pid, "-n", "nft", "list", "ruleset"],
+            ["podman", "unshare", "nsenter", "-t", pid, "-n", nft_path, "list", "ruleset"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -230,7 +231,8 @@ def nsenter_nft(pid: str, *args: str, stdin: str | None = None) -> subprocess.Co
     Returns:
         Completed process result.
     """
-    cmd = ["podman", "unshare", "nsenter", "-t", pid, "-n", "nft", *args]
+    nft_path = find_nft() or "nft"
+    cmd = ["podman", "unshare", "nsenter", "-t", pid, "-n", nft_path, *args]
     if stdin is not None:
         cmd.extend(["-f", "-"])
     return subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=30)

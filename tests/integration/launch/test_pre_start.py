@@ -27,9 +27,10 @@ class TestShieldPreStart:
         shield = Shield(ShieldConfig(state_dir=sd))
         args = shield.pre_start("test-container")
 
-        assert "--hooks-dir" in args
         assert "--annotation" in args
         assert "--cap-drop" in args
+        # --hooks-dir only present on podman >= 5.6.0;
+        # on older podman, global hooks are used instead
 
     @pytest.mark.needs_internet
     def test_pre_start_resolves_dns(self, shield_env: Path) -> None:

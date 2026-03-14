@@ -154,7 +154,14 @@ def wget(container: str, url: str, timeout: int = 5) -> subprocess.CompletedProc
         Completed process result.
     """
     return exec_in_container(
-        container, "wget", "-q", "--spider", f"--timeout={timeout}", url, timeout=timeout + 5
+        container,
+        "wget",
+        "-q",
+        "-O",
+        "/dev/null",
+        f"--timeout={timeout}",
+        url,
+        timeout=timeout + 5,
     )
 
 

@@ -592,6 +592,8 @@ def test_pre_start_old_podman_no_global_hooks_raises(
     make_config: ConfigFactory,
 ) -> None:
     """pre_start() on old podman without global hooks raises ShieldNeedsSetup."""
+    from unittest import mock as _mock
+
     from terok_shield.run import ShieldNeedsSetup
 
     _set_euid(monkeypatch, 0)
@@ -604,8 +606,9 @@ def test_pre_start_old_podman_no_global_hooks_raises(
     )
     harness.profiles.compose_profiles.return_value = []
 
-    with pytest.raises(ShieldNeedsSetup, match="terok-shield setup"):
-        harness.mode.pre_start("test", ["dev-standard"])
+    with _mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=False):
+        with pytest.raises(ShieldNeedsSetup, match="terok-shield setup"):
+            harness.mode.pre_start("test", ["dev-standard"])
 
 
 def test_get_podman_info_caches_result(make_hook_mode: HookModeHarnessFactory) -> None:
