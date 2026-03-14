@@ -207,9 +207,11 @@ def _build_parser() -> argparse.ArgumentParser:
         """Lazy version action — only calls podman/nft when --version is used."""
 
         def __init__(self, **kwargs: Any) -> None:
+            """Accept standard argparse Action kwargs."""
             super().__init__(nargs=0, **kwargs)
 
         def __call__(self, parser: argparse.ArgumentParser, *_args: Any, **_kw: Any) -> None:
+            """Print version info and exit."""
             print(_version_string())
             parser.exit()
 

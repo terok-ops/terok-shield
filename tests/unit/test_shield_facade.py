@@ -3,6 +3,7 @@
 
 """Tests for the Shield facade class (__init__.py)."""
 
+import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -371,8 +372,6 @@ def test_tail_log_delegates_to_audit(make_shield: ShieldHarnessFactory) -> None:
 
 # ── check_environment tests ──────────────────────────────
 
-import json
-
 
 def _podman_info_json(version: str = "5.8.0", **host_extra: object) -> str:
     """Build a mock podman info JSON string."""
@@ -452,9 +451,7 @@ class TestCheckEnvironment:
 
         # First call (hooks_dirs from find_hooks_dirs) -> True (hooks exist)
         # Second call ([sys_dir]) -> False (not in system dir)
-        with mock.patch(
-            "terok_shield.has_global_hooks", side_effect=[True, False]
-        ):
+        with mock.patch("terok_shield.has_global_hooks", side_effect=[True, False]):
             env = harness.shield.check_environment()
         assert env.health == "ok"
         assert env.hooks == "global-user"
