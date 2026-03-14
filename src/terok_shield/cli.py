@@ -297,6 +297,11 @@ def _dispatch(args: argparse.Namespace) -> None:
     cmd_name = args.command
     state_dir_override = getattr(args, "state_dir", None)
 
+    # CLI-only: setup doesn't need Shield
+    if cmd_name == "setup":
+        _cmd_setup(root=getattr(args, "root", False), user=getattr(args, "user", False))
+        return
+
     # CLI-only: logs with aggregated mode (no container -> scan all)
     if cmd_name == "logs":
         _cmd_logs_cli(
@@ -465,6 +470,45 @@ def _cmd_logs_cli(
             return
         for entry in entries:
             print(json.dumps(entry))
+
+
+def _cmd_setup(*, root: bool, user: bool) -> None:
+    """Install global OCI hooks for podman < 5.6.0 restart persistence."""
+    from .mode_hook import setup_global_hooks
+    from .podman_info import (
+        USER_HOOKS_DIR,
+        ensure_containers_conf_hooks_dir,
+        system_hooks_dir,
+    )
+
+    sys_dir = system_hooks_dir()
+    usr_dir = USER_HOOKS_DIR.expanduser()
+
+    if not root and not user:
+        # Interactive: present options
+        print("terok-shield setup: install global OCI hooks\n")
+        print(f"  [r] System-wide (sudo) → {sys_dir}")
+        print(f"  [u] User-local         → {usr_dir}")
+        print("      (+ update ~/.config/containers/containers.conf)")
+        print()
+        choice = input("Choose [r/u]: ").strip().lower()
+        if choice == "r":
+            root = True
+        elif choice == "u":
+            user = True
+        else:
+            print("Cancelled.")
+            return
+
+    if root:
+        print(f"Installing hooks to {sys_dir} (sudo)...")
+        setup_global_hooks(sys_dir, use_sudo=True)
+        print("Done. Global hooks installed.")
+    elif user:
+        print(f"Installing hooks to {usr_dir}...")
+        setup_global_hooks(usr_dir)
+        ensure_containers_conf_hooks_dir(usr_dir)
+        print("Done. Global hooks installed.")
 
 
 def _get_version() -> str:

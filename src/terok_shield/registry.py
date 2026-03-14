@@ -252,6 +252,15 @@ COMMANDS: tuple[CommandDef, ...] = (
         handler=_handle_profiles,
     ),
     CommandDef(
+        name="setup",
+        help="Install global OCI hooks (for podman < 5.6.0)",
+        standalone_only=True,
+        args=(
+            ArgDef(name="--root", action="store_true", help="Install system-wide (uses sudo)"),
+            ArgDef(name="--user", action="store_true", help="Install to user directory"),
+        ),
+    ),
+    CommandDef(
         name="check-environment",
         help="Check podman environment for compatibility issues",
         handler=_handle_check_environment,

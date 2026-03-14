@@ -115,6 +115,8 @@ path = "terok_shield.cli"
 depends_on = [
     "terok_shield",
     "terok_shield.audit",
+    "terok_shield.mode_hook",
+    "terok_shield.podman_info",
     "terok_shield.registry",
     "terok_shield.run",
     "terok_shield.validation",

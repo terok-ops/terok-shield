@@ -196,71 +196,53 @@ def parse_resolv_conf(text: str) -> str:
     return ""
 
 
-_USER_HOOKS_DIR = "~/.local/share/containers/oci/hooks.d"
-
-_HOOK_FILES = ("terok-shield-createRuntime.json", "terok-shield-poststop.json")
+USER_HOOKS_DIR = Path("~/.local/share/containers/oci/hooks.d")
 
 
-def global_hooks_hint(
-    state_dir: Path | None = None,
-    hooks_dirs: list[Path] | None = None,
-) -> str:
-    """Generate a human-readable hint for setting up global hooks.
+def system_hooks_dir() -> Path:
+    """Return the best system-level hooks directory.
 
-    When *state_dir* is provided, includes concrete ``cp`` commands
-    using the hook files that ``install_hooks()`` already wrote there.
-
-    Args:
-        state_dir: Per-container state directory (source of hook files).
-        hooks_dirs: Override auto-detected hooks directories.
+    Prefers existing directories; falls back to ``/etc/containers/oci/hooks.d``.
     """
-    if hooks_dirs is None:
-        hooks_dirs = find_hooks_dirs()
+    for d in _SYSTEM_HOOKS_DIRS:
+        if d.is_dir():
+            return d
+    return _SYSTEM_HOOKS_DIRS[-1]
 
-    lines = [
-        "Podman < 5.6.0: --hooks-dir does not persist on container restart",
-        "(ref: https://github.com/containers/podman/issues/17935).",
-        "",
-        "To ensure hooks survive restart, install them in a global hooks directory.",
-    ]
 
-    # Locate source files
-    hooks_subdir = f"{state_dir}/hooks" if state_dir else "<state_dir>/hooks"
-    entrypoint = f"{state_dir}/terok-shield-hook" if state_dir else "<state_dir>/terok-shield-hook"
-    cp_files = " ".join(f"{hooks_subdir}/{f}" for f in _HOOK_FILES)
+def global_hooks_hint() -> str:
+    """Short hint telling the user to run ``terok-shield setup``."""
+    return (
+        "Podman < 5.6.0: --hooks-dir does not persist on container restart\n"
+        "(ref: https://github.com/containers/podman/issues/17935).\n"
+        "\n"
+        "Run 'terok-shield setup' to install global hooks."
+    )
 
-    # Detect system dirs
-    system_dirs = [d for d in _SYSTEM_HOOKS_DIRS if d.is_dir()]
-    system_dir = system_dirs[0] if system_dirs else _SYSTEM_HOOKS_DIRS[-1]
 
-    # Always show both options so the user can choose
-    lines.append("")
-    lines.append(f"Hook source files: {hooks_subdir}/")
-    lines.append(f"Entrypoint script: {entrypoint}")
-    lines.append("")
+def ensure_containers_conf_hooks_dir(hooks_dir: Path) -> None:
+    """Ensure ``~/.config/containers/containers.conf`` includes *hooks_dir*.
 
-    # Option 1: system-wide (sudo)
-    lines.append("Option 1 — system-wide (needs sudo):")
-    lines.append(f"  sudo mkdir -p {system_dir}")
-    lines.append(f"  sudo cp {cp_files} {system_dir}/")
-    lines.append(f"  sudo cp {entrypoint} {system_dir}/")
-    # Fix the entrypoint path in the copied JSONs
-    lines.append(f"  sudo sed -i 's|{entrypoint}|{system_dir}/terok-shield-hook|'")
-    lines.append(f"    {' '.join(f'{system_dir}/{f}' for f in _HOOK_FILES)}")
+    Creates the file if absent.  Appends ``[engine]`` section with
+    ``hooks_dir`` if not already configured.  Warns (but does not fail)
+    if ``hooks_dir`` is already set to a different value.
+    """
+    conf_path = _user_containers_conf()
+    hooks_str = str(hooks_dir)
 
-    # Option 2: user-local (no root)
-    user_dir = _USER_HOOKS_DIR
-    lines.append("")
-    lines.append("Option 2 — user-local (no root):")
-    lines.append(f"  mkdir -p {user_dir}")
-    lines.append(f"  cp {cp_files} {user_dir}/")
-    lines.append(f"  cp {entrypoint} {user_dir}/")
-    lines.append(f"  sed -i 's|{entrypoint}|{user_dir}/terok-shield-hook|'")
-    lines.append(f"    {' '.join(f'{user_dir}/{f}' for f in _HOOK_FILES)}")
-    lines.append("")
-    lines.append("  Then ensure podman checks this directory — add to")
-    lines.append("  ~/.config/containers/containers.conf:")
-    lines.append("    [engine]")
-    lines.append(f'    hooks_dir = ["{user_dir}"]')
-
-    return "\n".join(lines)
+    if conf_path.is_file():
+        existing = _parse_hooks_dir_from_conf(conf_path)
+        if existing:
+            if hooks_str in existing or str(hooks_dir.expanduser()) in existing:
+                return  # already configured
+            print(
+                f"Warning: {conf_path} already has hooks_dir = {existing}\n"
+                f"Add {hooks_str!r} to the list manually if needed."
+            )
+            return
+        # File exists but no hooks_dir — append
+        with conf_path.open("a") as f:
+            f.write(f'\n[engine]\nhooks_dir = ["{hooks_str}"]\n')
+    else:
+        conf_path.parent.mkdir(parents=True, exist_ok=True)
+        conf_path.write_text(f'[engine]\nhooks_dir = ["{hooks_str}"]\n')
