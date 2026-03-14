@@ -75,6 +75,8 @@ def _handle_status(shield: Shield, *, container: str | None = None) -> None:
             print()
             for issue in env.issues:
                 print(f"  Warning: {issue}")
+            if env.needs_setup:
+                print("\n  Run 'terok-shield setup' to fix.")
 
 
 def _handle_allow(shield: Shield, container: str, *, target: str) -> None:
