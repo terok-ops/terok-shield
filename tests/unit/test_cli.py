@@ -969,3 +969,68 @@ def test_build_config_uses_resolved_state_root_when_not_overridden(
     monkeypatch.setenv("TEROK_SHIELD_CONFIG_DIR", str(NONEXISTENT_DIR / "config"))
     config = _build_config("ctr")
     assert config.state_dir == FAKE_STATE_DIR / "containers" / "ctr"
+
+
+# ── setup command tests ──────────────────────────────────
+
+
+class TestSetupCommand:
+    """Tests for the setup CLI command."""
+
+    @mock.patch("terok_shield.mode_hook.setup_global_hooks")
+    @mock.patch("terok_shield.podman_info.ensure_containers_conf_hooks_dir")
+    def test_setup_user(
+        self,
+        mock_ensure: mock.Mock,
+        mock_setup: mock.Mock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """setup --user calls setup_global_hooks and ensure_containers_conf."""
+        main(["setup", "--user"])
+        mock_setup.assert_called_once()
+        mock_ensure.assert_called_once()
+        assert "Done" in capsys.readouterr().out
+
+    @mock.patch("terok_shield.mode_hook.setup_global_hooks")
+    def test_setup_root(
+        self,
+        mock_setup: mock.Mock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """setup --root calls setup_global_hooks with use_sudo=True."""
+        main(["setup", "--root"])
+        mock_setup.assert_called_once()
+        _, kwargs = mock_setup.call_args
+        assert kwargs.get("use_sudo") is True
+        assert "Done" in capsys.readouterr().out
+
+    def test_setup_root_and_user_rejected(self) -> None:
+        """setup --root --user raises."""
+        with pytest.raises(SystemExit):
+            main(["setup", "--root", "--user"])
+
+
+# ── check-environment command test ───────────────────────
+
+
+@mock.patch("terok_shield.run.find_nft", return_value=NFT_BINARY)
+def test_check_environment_command(
+    _find: mock.Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """check-environment outputs machine-readable key=value block."""
+    monkeypatch.setenv("TEROK_SHIELD_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TEROK_SHIELD_CONFIG_DIR", str(NONEXISTENT_DIR / "config"))
+    with mock.patch("terok_shield.Shield.check_environment") as mock_check:
+        from terok_shield import EnvironmentCheck
+
+        mock_check.return_value = EnvironmentCheck(
+            ok=True, podman_version=(5, 8, 0), hooks="per-container", health="ok"
+        )
+        main(["check-environment"])
+    out = capsys.readouterr().out
+    assert "podman_version=5.8.0" in out
+    assert "hooks=per-container" in out
+    assert "health=ok" in out
