@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jiri Vyskocil
+# SPDX-License-Identifier: Apache-2.0
+
 # Ubuntu 24.04 (Noble) — podman 4.9.3, slirp4netns + pasta available
 FROM docker.io/library/ubuntu:24.04
 

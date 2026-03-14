@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jiri Vyskocil
+# SPDX-License-Identifier: Apache-2.0
+
 # Fedora 43 — podman 5.8.x, pasta default, modern everything
 FROM registry.fedoraproject.org/fedora:43
 
