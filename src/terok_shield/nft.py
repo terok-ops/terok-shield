@@ -114,8 +114,21 @@ def _audit_allow_rules() -> str:
 
 
 def _loopback_port_rules(ports: tuple[int, ...]) -> str:
-    """Generate nft accept rules for loopback ports."""
+    """Generate nft accept rules for loopback ports (lo interface only)."""
     return "\n".join(f'            tcp dport {p} oifname "lo" accept' for p in ports)
+
+
+def _gateway_port_rules(gateway: str, ports: tuple[int, ...]) -> str:
+    """Generate nft accept rules for gateway + loopback ports.
+
+    Allows traffic to the network gateway (e.g. slirp4netns 10.0.2.2)
+    on the specified ports.  Placed before private-range reject rules
+    so it cannot be blocked by RFC 1918 filtering.
+    """
+    if not gateway or not ports:
+        return ""
+    af = "ip" if _is_v4(gateway) else "ip6"
+    return "\n".join(f"        tcp dport {p} {af} daddr {gateway} accept" for p in ports)
 
 
 # ── RulesetBuilder ───────────────────────────────────────
@@ -131,28 +144,43 @@ class RulesetBuilder:
     were previously threaded as parameters to every function call.
     """
 
-    def __init__(self, *, dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> None:
-        """Create a builder with validated DNS and loopback port config.
+    def __init__(
+        self,
+        *,
+        dns: str = PASTA_DNS,
+        loopback_ports: tuple[int, ...] = (),
+        gateway: str = "",
+    ) -> None:
+        """Create a builder with validated DNS, gateway, and loopback port config.
 
         Args:
             dns: DNS server address (pasta default forwarder).
             loopback_ports: TCP ports to allow on the loopback interface.
+            gateway: Network gateway IP (e.g. slirp4netns 10.0.2.2).
+                When set with loopback_ports, generates accept rules for
+                the gateway before private-range reject rules.
         """
         dns = safe_ip(dns)
         for p in loopback_ports:
             _safe_port(p)
+        if gateway:
+            gateway = safe_ip(gateway)
         self._dns = dns
         self._loopback_ports = loopback_ports
+        self._gateway = gateway
 
     def build_hook(self) -> str:
         """Generate the hook-mode (deny-all) nftables ruleset."""
-        return hook_ruleset(dns=self._dns, loopback_ports=self._loopback_ports)
+        return hook_ruleset(
+            dns=self._dns, loopback_ports=self._loopback_ports, gateway=self._gateway
+        )
 
     def build_bypass(self, *, allow_all: bool = False) -> str:
         """Generate the bypass-mode (accept-all + log) ruleset."""
         return bypass_ruleset(
             dns=self._dns,
             loopback_ports=self._loopback_ports,
+            gateway=self._gateway,
             allow_all=allow_all,
         )
 
@@ -178,24 +206,38 @@ class RulesetBuilder:
 # ── Module-level free functions (unchanged API) ──────────
 
 
-def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> str:
+def hook_ruleset(
+    dns: str = PASTA_DNS,
+    loopback_ports: tuple[int, ...] = (),
+    gateway: str = "",
+) -> str:
     """Generate a per-container nftables ruleset for hook mode.
 
     Applied by the OCI hook into the container's own netns.
     Dual-stack: both IPv4 and IPv6 use deny-all + allowlist.
 
     Chain order (output):
-        loopback -> established -> DNS -> loopback ports -> allow sets -> private-range reject -> deny
+        loopback -> established -> DNS -> gateway ports -> loopback ports
+        -> allow sets -> private-range reject -> deny
 
     Args:
         dns: DNS server address (pasta default forwarder).
         loopback_ports: TCP ports to allow on the loopback interface.
+        gateway: Network gateway IP for loopback port access (slirp4netns).
     """
     safe_ip(dns)
+    if gateway:
+        safe_ip(gateway)
     for p in loopback_ports:
         _safe_port(p)
     port_rules = _loopback_port_rules(loopback_ports)
-    port_block = f"\n{port_rules}\n" if port_rules else "\n"
+    gw_rules = _gateway_port_rules(gateway, loopback_ports)
+    infra_block = ""
+    if gw_rules:
+        infra_block += f"\n{gw_rules}"
+    if port_rules:
+        infra_block += f"\n{port_rules}"
+    infra_block += "\n" if infra_block else "\n"
     dns_af = "ip" if _is_v4(dns) else "ip6"
     return textwrap.dedent(f"""\
         table {NFT_TABLE} {{
@@ -207,7 +249,7 @@ def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> 
                 oifname "lo" accept
                 ct state established,related accept
                 udp dport 53 {dns_af} daddr {dns} accept
-                tcp dport 53 {dns_af} daddr {dns} accept{port_block}\
+                tcp dport 53 {dns_af} daddr {dns} accept{infra_block}\
         {_audit_allow_rules()}
         {_private_range_rules()}
         {_audit_deny_rule()}
@@ -228,6 +270,7 @@ def hook_ruleset(dns: str = PASTA_DNS, loopback_ports: tuple[int, ...] = ()) -> 
 def bypass_ruleset(
     dns: str = PASTA_DNS,
     loopback_ports: tuple[int, ...] = (),
+    gateway: str = "",
     *,
     allow_all: bool = False,
 ) -> str:
@@ -241,13 +284,22 @@ def bypass_ruleset(
     Args:
         dns: DNS server address (pasta default forwarder).
         loopback_ports: TCP ports to allow on the loopback interface.
+        gateway: Network gateway IP for loopback port access (slirp4netns).
         allow_all: If True, remove private-range reject rules.
     """
     safe_ip(dns)
+    if gateway:
+        safe_ip(gateway)
     for p in loopback_ports:
         _safe_port(p)
     port_rules = _loopback_port_rules(loopback_ports)
-    port_block = f"\n{port_rules}\n" if port_rules else "\n"
+    gw_rules = _gateway_port_rules(gateway, loopback_ports)
+    infra_block = ""
+    if gw_rules:
+        infra_block += f"\n{gw_rules}"
+    if port_rules:
+        infra_block += f"\n{port_rules}"
+    infra_block += "\n" if infra_block else "\n"
     dns_af = "ip" if _is_v4(dns) else "ip6"
     private_block = "" if allow_all else f"\n{_private_range_rules()}"
     bypass_log = f'        ct state new log prefix "{BYPASS_LOG_PREFIX}: " counter'
@@ -261,7 +313,7 @@ def bypass_ruleset(
                 oifname "lo" accept
                 ct state established,related accept
                 udp dport 53 {dns_af} daddr {dns} accept
-                tcp dport 53 {dns_af} daddr {dns} accept{port_block}\
+                tcp dport 53 {dns_af} daddr {dns} accept{infra_block}\
         {bypass_log}{private_block}
             }}
 

@@ -89,6 +89,7 @@ def hook_main_harness(monkeypatch: pytest.MonkeyPatch) -> HookMainHarness:
     monkeypatch.setattr("terok_shield.oci_hook.RulesetBuilder", ruleset_builder_cls)
     monkeypatch.setattr("terok_shield.oci_hook.SubprocessRunner", mock.MagicMock)
     monkeypatch.setattr("terok_shield.oci_hook._read_container_dns", lambda pid: "169.254.1.1")
+    monkeypatch.setattr("terok_shield.oci_hook._read_container_gateway", lambda pid: "")
     return HookMainHarness(
         executor_cls=executor_cls,
         audit_cls=audit_cls,
@@ -234,7 +235,7 @@ def test_hook_main_success(hook_main_harness: HookMainHarness, tmp_path: Path) -
     rc = hook_main(_oci_state("test-ctr", 42, annotations=_valid_annotations(tmp_path)))
     assert rc == 0
     hook_main_harness.ruleset_builder_cls.assert_called_once_with(
-        dns="169.254.1.1", loopback_ports=(1234,)
+        dns="169.254.1.1", loopback_ports=(1234,), gateway=""
     )
     hook_main_harness.executor.apply.assert_called_once_with("test-ctr", "42")
 

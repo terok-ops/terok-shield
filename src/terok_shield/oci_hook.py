@@ -32,7 +32,7 @@ from .config import (
     ANNOTATION_VERSION_KEY,
 )
 from .nft import RulesetBuilder
-from .podman_info import parse_resolv_conf
+from .podman_info import parse_proc_net_route, parse_resolv_conf
 from .run import ExecError, SubprocessRunner
 
 if TYPE_CHECKING:
@@ -282,7 +282,7 @@ class HookExecutor:
         return _parse_oci_state(stdin_data)
 
 
-# ── DNS detection ─────────────────────────────────────────
+# ── Network detection (DNS, gateway) ─────────────────────
 
 
 def _read_container_dns(pid: str) -> str:
@@ -310,6 +310,20 @@ def _read_container_dns(pid: str) -> str:
             "The container's network may not be configured correctly."
         )
     return dns
+
+
+def _read_container_gateway(pid: str) -> str:
+    """Read the default gateway from a container's routing table.
+
+    Returns empty string if the route table is unreadable or has no
+    default route (e.g. pasta mode).
+    """
+    route_path = Path(f"/proc/{pid}/net/route")
+    try:
+        text = route_path.read_text()
+    except OSError:
+        return ""
+    return parse_proc_net_route(text)
 
 
 # ── Entry point ──────────────────────────────────────────
@@ -378,16 +392,17 @@ def hook_main(stdin_data: str | None = None, stage: str = "createRuntime") -> in
         raw_audit = annotations.get(ANNOTATION_AUDIT_ENABLED_KEY, "true").strip().lower()
         audit_enabled = raw_audit not in ("false", "0")
 
-        # Read DNS from the container's resolv.conf (mounts are done
-        # at createRuntime per OCI spec).
+        # Read DNS and gateway from the container's network namespace
+        # (mounts + netns are done at createRuntime per OCI spec).
         dns = _read_container_dns(pid)
+        gateway = _read_container_gateway(pid)
 
         runner = SubprocessRunner()
         audit = AuditLogger(
             audit_path=state.audit_path(sd),
             enabled=audit_enabled,
         )
-        ruleset = RulesetBuilder(dns=dns, loopback_ports=loopback_ports)
+        ruleset = RulesetBuilder(dns=dns, loopback_ports=loopback_ports, gateway=gateway)
         executor = HookExecutor(
             runner=runner,
             audit=audit,

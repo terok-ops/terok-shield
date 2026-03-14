@@ -39,6 +39,7 @@ from .podman_info import (
     global_hooks_hint,
     has_global_hooks,
     parse_podman_info,
+    parse_proc_net_route,
     parse_resolv_conf,
 )
 from .run import ExecError, ShieldNeedsSetup
@@ -416,10 +417,20 @@ class HookMode:
             )
         return dns
 
+    def _read_container_gateway(self, container: str) -> str:
+        """Read default gateway from a running container's routing table."""
+        pid = self._runner.podman_inspect(container, "{{.State.Pid}}")
+        output = self._runner.run(
+            ["podman", "unshare", "cat", f"/proc/{pid}/net/route"],
+            check=False,
+        )
+        return parse_proc_net_route(output)
+
     def _container_ruleset(self, container: str) -> RulesetBuilder:
-        """Build a RulesetBuilder with the container's actual DNS address."""
+        """Build a RulesetBuilder with the container's actual DNS and gateway."""
         dns = self._read_container_dns(container)
-        return RulesetBuilder(dns=dns, loopback_ports=self._config.loopback_ports)
+        gateway = self._read_container_gateway(container)
+        return RulesetBuilder(dns=dns, loopback_ports=self._config.loopback_ports, gateway=gateway)
 
     def shield_down(self, container: str, *, allow_all: bool = False) -> None:
         """Switch a running container to bypass mode."""
