@@ -1,4 +1,4 @@
-.PHONY: all lint format test test-unit ruff-report bandit-report sonar-inputs test-integration-host test-integration-network test-integration-podman test-integration test-integration-map ci-map tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
+.PHONY: all lint format test test-unit ruff-report bandit-report sonar-inputs test-integration-host test-integration-network test-integration-podman test-integration test-integration-map test-matrix test-matrix-build ci-map tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
 
 REPORTS_DIR ?= reports
 COVERAGE_XML ?= $(REPORTS_DIR)/coverage.xml

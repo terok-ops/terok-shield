@@ -10,10 +10,15 @@ import pytest
 
 from terok_shield.podman_info import (
     HOOK_JSON_FILENAME,
+    _parse_hooks_dir_from_conf,
+    _parse_version,
+    ensure_containers_conf_hooks_dir,
     find_hooks_dirs,
+    global_hooks_hint,
     has_global_hooks,
     parse_podman_info,
     parse_resolv_conf,
+    system_hooks_dir,
 )
 
 # ── Real podman info samples (from actual machines) ───────
@@ -286,8 +291,6 @@ class TestHasGlobalHooks:
 
 # ── ensure_containers_conf_hooks_dir tests ───────────────
 
-from terok_shield.podman_info import ensure_containers_conf_hooks_dir
-
 
 class TestEnsureContainersConf:
     """Tests for containers.conf modification."""
@@ -376,9 +379,6 @@ class TestEnsureContainersConf:
 # ── _parse_version edge cases ────────────────────────────
 
 
-from terok_shield.podman_info import _parse_version
-
-
 class TestParseVersion:
     """Tests for version string parsing."""
 
@@ -405,9 +405,6 @@ class TestParseVersion:
 
 
 # ── _parse_hooks_dir_from_conf edge cases ────────────────
-
-
-from terok_shield.podman_info import _parse_hooks_dir_from_conf
 
 
 class TestParseHooksDirFromConf:
@@ -445,9 +442,6 @@ class TestParseHooksDirFromConf:
 # ── system_hooks_dir tests ───────────────────────────────
 
 
-from terok_shield.podman_info import system_hooks_dir
-
-
 class TestSystemHooksDir:
     """Tests for system hooks directory detection."""
 
@@ -468,9 +462,6 @@ class TestSystemHooksDir:
 
 
 # ── global_hooks_hint tests ──────────────────────────────
-
-
-from terok_shield.podman_info import global_hooks_hint
 
 
 class TestGlobalHooksHint:
