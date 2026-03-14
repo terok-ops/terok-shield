@@ -360,3 +360,145 @@ class TestEnsureContainersConf:
         assert "[containers]" in text
         assert "[engine]" in text
         assert 'hooks_dir = ["/my/hooks"]' in text
+
+    def test_warns_when_different_hooks_dir_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Warns and does not modify when hooks_dir is already set differently."""
+        conf = tmp_path / "containers.conf"
+        conf.write_text('[engine]\nhooks_dir = ["/other/hooks"]\n')
+        monkeypatch.setattr("terok_shield.podman_info._user_containers_conf", lambda: conf)
+        ensure_containers_conf_hooks_dir(Path("/my/hooks"))
+        assert "Warning" in capsys.readouterr().out
+        assert conf.read_text().count("hooks_dir") == 1  # unchanged
+
+
+# ── _parse_version edge cases ────────────────────────────
+
+
+from terok_shield.podman_info import _parse_version
+
+
+class TestParseVersion:
+    """Tests for version string parsing."""
+
+    def test_normal_version(self) -> None:
+        """Standard 3-part version."""
+        assert _parse_version("5.4.2") == (5, 4, 2)
+
+    def test_two_part_version(self) -> None:
+        """Two-part version."""
+        assert _parse_version("5.4") == (5, 4)
+
+    def test_version_with_suffix(self) -> None:
+        """Version with non-numeric suffix stops at the non-numeric part."""
+        # "5.4.2-beta1" splits to ["5", "4", "2-beta1"], int("2-beta1") fails → (5, 4)
+        assert _parse_version("5.4.2-beta1") == (5, 4)
+
+    def test_empty_string(self) -> None:
+        """Empty string returns (0,)."""
+        assert _parse_version("") == (0,)
+
+    def test_non_numeric(self) -> None:
+        """Completely non-numeric returns (0,)."""
+        assert _parse_version("abc") == (0,)
+
+
+# ── _parse_hooks_dir_from_conf edge cases ────────────────
+
+
+from terok_shield.podman_info import _parse_hooks_dir_from_conf
+
+
+class TestParseHooksDirFromConf:
+    """Tests for containers.conf hooks_dir parsing."""
+
+    def test_hooks_dir_as_string(self, tmp_path: Path) -> None:
+        """hooks_dir as a bare string (not list)."""
+        conf = tmp_path / "containers.conf"
+        conf.write_text('[engine]\nhooks_dir = "/single/path"\n')
+        assert _parse_hooks_dir_from_conf(conf) == ["/single/path"]
+
+    def test_hooks_dir_missing(self, tmp_path: Path) -> None:
+        """No hooks_dir key returns empty."""
+        conf = tmp_path / "containers.conf"
+        conf.write_text('[engine]\nfoo = "bar"\n')
+        assert _parse_hooks_dir_from_conf(conf) == []
+
+    def test_nonexistent_file(self, tmp_path: Path) -> None:
+        """Nonexistent file returns empty."""
+        assert _parse_hooks_dir_from_conf(tmp_path / "nope.conf") == []
+
+    def test_invalid_toml(self, tmp_path: Path) -> None:
+        """Invalid TOML returns empty."""
+        conf = tmp_path / "containers.conf"
+        conf.write_text("not valid toml {{{\n")
+        assert _parse_hooks_dir_from_conf(conf) == []
+
+    def test_hooks_dir_empty_list(self, tmp_path: Path) -> None:
+        """Empty hooks_dir list returns empty."""
+        conf = tmp_path / "containers.conf"
+        conf.write_text("[engine]\nhooks_dir = []\n")
+        assert _parse_hooks_dir_from_conf(conf) == []
+
+
+# ── system_hooks_dir tests ───────────────────────────────
+
+
+from terok_shield.podman_info import system_hooks_dir
+
+
+class TestSystemHooksDir:
+    """Tests for system hooks directory detection."""
+
+    def test_returns_existing_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns an existing system dir when available."""
+        d = tmp_path / "hooks.d"
+        d.mkdir()
+        monkeypatch.setattr("terok_shield.podman_info._SYSTEM_HOOKS_DIRS", (d,))
+        assert system_hooks_dir() == d
+
+    def test_fallback_when_none_exist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Falls back to last entry when no system dir exists."""
+        monkeypatch.setattr(
+            "terok_shield.podman_info._SYSTEM_HOOKS_DIRS",
+            (Path("/nonexistent/a"), Path("/nonexistent/b")),
+        )
+        assert system_hooks_dir() == Path("/nonexistent/b")
+
+
+# ── global_hooks_hint tests ──────────────────────────────
+
+
+from terok_shield.podman_info import global_hooks_hint
+
+
+class TestGlobalHooksHint:
+    """Tests for the setup hint message."""
+
+    def test_contains_setup_command(self) -> None:
+        """Hint mentions terok-shield setup."""
+        assert "terok-shield setup" in global_hooks_hint()
+
+    def test_contains_reference(self) -> None:
+        """Hint includes the podman issue reference."""
+        assert "17935" in global_hooks_hint()
+
+
+# ── find_hooks_dirs system conf path ─────────────────────
+
+
+class TestFindHooksDirsSystemConf:
+    """Test system-level containers.conf parsing in find_hooks_dirs."""
+
+    def test_system_conf_used_when_no_user_conf(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """System containers.conf is used when user config absent."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-user"))
+        sys_conf = tmp_path / "system.conf"
+        sys_conf.write_text('[engine]\nhooks_dir = ["/sys/hooks"]\n')
+        monkeypatch.setattr("terok_shield.podman_info._SYSTEM_CONF_PATHS", (sys_conf,))
+        monkeypatch.setattr("terok_shield.podman_info._SYSTEM_HOOKS_DIRS", ())
+        dirs = find_hooks_dirs()
+        assert dirs == [Path("/sys/hooks")]

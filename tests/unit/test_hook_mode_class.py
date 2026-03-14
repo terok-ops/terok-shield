@@ -498,3 +498,159 @@ def test_install_hooks_creates_entrypoint_and_hook_jsons(tmp_path: Path) -> None
         assert data["version"] == "1.0.0"
         assert data["hook"]["path"] == str(hook_entrypoint)
         assert stage_name in data["stages"]
+
+
+def test_setup_global_hooks_non_sudo(tmp_path: Path) -> None:
+    """setup_global_hooks() installs hooks without sudo."""
+    from terok_shield.mode_hook import setup_global_hooks
+
+    target = tmp_path / "hooks.d"
+    setup_global_hooks(target)
+    assert (target / "terok-shield-hook").is_file()
+    assert (target / "terok-shield-hook").stat().st_mode & 0o100
+    assert (target / "terok-shield-createRuntime.json").is_file()
+    assert (target / "terok-shield-poststop.json").is_file()
+    # Hook JSONs reference entrypoint in the target dir
+    data = json.loads((target / "terok-shield-createRuntime.json").read_text())
+    assert data["hook"]["path"] == str(target / "terok-shield-hook")
+
+
+def test_setup_global_hooks_sudo_uses_subprocess(tmp_path: Path) -> None:
+    """setup_global_hooks(use_sudo=True) calls sudo subprocess."""
+    from unittest import mock
+
+    from terok_shield.mode_hook import setup_global_hooks
+
+    target = tmp_path / "system-hooks"
+    with mock.patch("subprocess.run") as mock_run:
+        setup_global_hooks(target, use_sudo=True)
+        # Should call sudo mkdir, sudo cp, sudo chmod
+        assert mock_run.call_count == 3
+        cmds = [call.args[0] for call in mock_run.call_args_list]
+        assert all(cmd[0] == "sudo" for cmd in cmds)
+
+
+def test_pre_start_slirp4netns_network_args(
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() generates correct slirp4netns network args."""
+    _set_euid(monkeypatch, 1000)
+    harness = make_hook_mode(config=make_config(loopback_ports=(9418,)))
+    # Podman 4.x with slirp4netns
+    harness.runner.run.return_value = json.dumps(
+        {
+            "host": {
+                "slirp4netns": {"executable": "/usr/bin/slirp4netns"},
+            },
+            "version": {"Version": "5.8.0"},
+        }
+    )
+    harness.profiles.compose_profiles.return_value = []
+
+    args = harness.mode.pre_start("test", ["dev-standard"])
+
+    assert "--network" in args
+    net_arg = args[args.index("--network") + 1]
+    assert net_arg == "slirp4netns:allow_host_loopback=true"
+    assert "host.containers.internal:10.0.2.2" in args
+
+
+def test_pre_start_old_podman_with_global_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() on old podman with global hooks skips --hooks-dir."""
+    from unittest import mock
+
+    _set_euid(monkeypatch, 0)
+    harness = make_hook_mode(config=make_config())
+    harness.runner.run.return_value = json.dumps(
+        {
+            "host": {},
+            "version": {"Version": "5.4.2"},
+        }
+    )
+    harness.profiles.compose_profiles.return_value = []
+
+    with mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True):
+        args = harness.mode.pre_start("test", ["dev-standard"])
+
+    assert "--hooks-dir" not in args
+    harness.audit.log_event.assert_any_call(
+        "test",
+        "setup",
+        detail=mock.ANY,
+    )
+
+
+def test_pre_start_old_podman_no_global_hooks_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() on old podman without global hooks raises ShieldNeedsSetup."""
+    from terok_shield.run import ShieldNeedsSetup
+
+    _set_euid(monkeypatch, 0)
+    harness = make_hook_mode(config=make_config())
+    harness.runner.run.return_value = json.dumps(
+        {
+            "host": {},
+            "version": {"Version": "5.4.2"},
+        }
+    )
+    harness.profiles.compose_profiles.return_value = []
+
+    with pytest.raises(ShieldNeedsSetup, match="terok-shield setup"):
+        harness.mode.pre_start("test", ["dev-standard"])
+
+
+def test_get_podman_info_caches_result(make_hook_mode: HookModeHarnessFactory) -> None:
+    """_get_podman_info() caches the result across calls."""
+    harness = make_hook_mode()
+    harness.runner.run.return_value = _MODERN_PODMAN_INFO
+
+    info1 = harness.mode._get_podman_info()
+    info2 = harness.mode._get_podman_info()
+    assert info1 is info2
+    # run() called only once
+    harness.runner.run.assert_called_once()
+
+
+def test_read_container_dns(make_hook_mode: HookModeHarnessFactory) -> None:
+    """_read_container_dns() reads nameserver from container resolv.conf."""
+    harness = make_hook_mode()
+    harness.runner.podman_inspect.return_value = "12345"
+    harness.runner.run.return_value = "nameserver 10.0.2.3\n"
+
+    dns = harness.mode._read_container_dns("test-ctr")
+    assert dns == "10.0.2.3"
+
+
+def test_read_container_dns_raises_on_no_nameserver(
+    make_hook_mode: HookModeHarnessFactory,
+) -> None:
+    """_read_container_dns() raises when resolv.conf has no nameserver."""
+    harness = make_hook_mode()
+    harness.runner.podman_inspect.return_value = "12345"
+    harness.runner.run.return_value = "# empty resolv.conf\n"
+
+    with pytest.raises(RuntimeError, match="no nameserver"):
+        harness.mode._read_container_dns("test-ctr")
+
+
+def test_container_ruleset_returns_builder_with_dns(
+    make_hook_mode: HookModeHarnessFactory,
+) -> None:
+    """_container_ruleset() creates RulesetBuilder with resolved DNS."""
+    from terok_shield.nft import RulesetBuilder
+
+    harness = make_hook_mode()
+    harness.runner.podman_inspect.return_value = "12345"
+    harness.runner.run.return_value = "nameserver 10.0.2.3\n"
+
+    ruleset = harness.mode._container_ruleset("test-ctr")
+    assert isinstance(ruleset, RulesetBuilder)
