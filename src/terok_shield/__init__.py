@@ -24,14 +24,42 @@ try:
 except PackageNotFoundError:
     pass  # editable install or running from source without metadata
 
+from dataclasses import dataclass, field
+
 from . import state
 from .audit import AuditLogger
 from .config import ShieldConfig, ShieldMode, ShieldState
 from .dns import DnsResolver
 from .nft import RulesetBuilder
+from .podman_info import (
+    find_hooks_dirs,
+    global_hooks_hint,
+    has_global_hooks,
+    parse_podman_info,
+)
 from .profiles import ProfileLoader
-from .run import CommandRunner, ExecError, NftNotFoundError, SubprocessRunner
+from .run import CommandRunner, ExecError, NftNotFoundError, ShieldNeedsSetup, SubprocessRunner
 from .util import is_ip as _is_ip
+
+
+@dataclass(frozen=True)
+class EnvironmentCheck:
+    """Result of :meth:`Shield.check_environment`.
+
+    Attributes:
+        ok: True if no issues found.
+        issues: List of human-readable issue descriptions.
+        podman_version: Detected podman version tuple.
+        needs_setup: True if one-time setup is required.
+        setup_hint: Setup instructions (empty if not needed).
+    """
+
+    ok: bool = True
+    issues: list[str] = field(default_factory=list)
+    podman_version: tuple[int, ...] = (0,)
+    needs_setup: bool = False
+    setup_hint: str = ""
+
 
 # ── Shield Facade ────────────────────────────────────────
 
@@ -93,6 +121,51 @@ class Shield:
                 ruleset=self.ruleset,
             )
         raise ValueError(f"Unsupported shield mode: {mode!r}")
+
+    def check_environment(self) -> EnvironmentCheck:
+        """Check the podman environment for compatibility issues.
+
+        Proactive check for API consumers (e.g. terok).  Returns an
+        :class:`EnvironmentCheck` with detected issues and setup hints.
+        Does not raise — the caller decides how to handle issues.
+        """
+        output = self.runner.run(["podman", "info", "-f", "json"], check=False)
+        info = parse_podman_info(output)
+        issues: list[str] = []
+        needs_setup = False
+        setup_hint = ""
+
+        # Check hooks-dir persistence (podman < 5.6.0)
+        if not info.hooks_dir_persists:
+            hooks_dirs = find_hooks_dirs()
+            if has_global_hooks(hooks_dirs):
+                issues.append(
+                    f"Podman {'.'.join(str(v) for v in info.version)}: "
+                    "using global hooks (--hooks-dir does not persist on restart)"
+                )
+            else:
+                needs_setup = True
+                setup_hint = global_hooks_hint(hooks_dirs)
+                issues.append(
+                    f"Podman {'.'.join(str(v) for v in info.version)}: "
+                    "global hooks not installed — containers will lose firewall on restart"
+                )
+
+        # Check for stale global hooks on modern podman
+        if info.hooks_dir_persists and has_global_hooks():
+            issues.append(
+                "Stale global hooks detected — not needed on "
+                f"podman {'.'.join(str(v) for v in info.version)} (>= 5.6.0). "
+                "Consider removing them from your hooks directory."
+            )
+
+        return EnvironmentCheck(
+            ok=not issues,
+            issues=issues,
+            podman_version=info.version,
+            needs_setup=needs_setup,
+            setup_hint=setup_hint,
+        )
 
     def status(self) -> dict:
         """Return current shield status information."""
@@ -200,6 +273,7 @@ __all__ = [
     "CommandDef",
     "CommandRunner",
     "DnsResolver",
+    "EnvironmentCheck",
     "ExecError",
     "NftNotFoundError",
     "ProfileLoader",
@@ -207,6 +281,7 @@ __all__ = [
     "Shield",
     "ShieldConfig",
     "ShieldMode",
+    "ShieldNeedsSetup",
     "ShieldState",
     "SubprocessRunner",
 ]

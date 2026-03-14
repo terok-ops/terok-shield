@@ -33,14 +33,20 @@ from .config import (
     ShieldConfig,
     ShieldState,
 )
-from .nft import NFT_TABLE
-from .run import ExecError
+from .nft import NFT_TABLE, RulesetBuilder
+from .podman_info import (
+    PodmanInfo,
+    global_hooks_hint,
+    has_global_hooks,
+    parse_podman_info,
+    parse_resolv_conf,
+)
+from .run import ExecError, ShieldNeedsSetup
 from .util import is_ipv4
 
 if TYPE_CHECKING:
     from .audit import AuditLogger
     from .dns import DnsResolver
-    from .nft import RulesetBuilder
     from .profiles import ProfileLoader
     from .run import CommandRunner
 
@@ -131,6 +137,7 @@ class HookMode:
         self._dns = dns
         self._profiles = profiles
         self._ruleset = ruleset
+        self._podman_info: PodmanInfo | None = None
 
     def pre_start(self, container: str, profiles: list[str]) -> list[str]:
         """Prepare for container start in hook mode.
@@ -138,8 +145,12 @@ class HookMode:
         Installs hooks (idempotent), composes profiles, resolves DNS
         domains, writes allowlist, sets annotations, and returns the
         podman CLI arguments needed for shield protection.
+
+        Raises:
+            ShieldNeedsSetup: On podman < 5.6.0 without global hooks.
         """
         sd = self._config.state_dir.resolve()
+        info = self._get_podman_info()
 
         # Ensure state dirs and install hooks (idempotent)
         state.ensure_state_dirs(sd)
@@ -156,7 +167,7 @@ class HookMode:
         args: list[str] = []
 
         if os.geteuid() != 0:
-            mode = self._detect_rootless_network_mode()
+            mode = info.network_mode
             if mode == "slirp4netns":
                 args += [
                     "--network",
@@ -189,8 +200,27 @@ class HookMode:
             f"{ANNOTATION_VERSION_KEY}={state.BUNDLE_VERSION}",
             "--annotation",
             f"{ANNOTATION_AUDIT_ENABLED_KEY}={str(self._config.audit_enabled).lower()}",
-            "--hooks-dir",
-            str(state.hooks_dir(sd)),
+        ]
+
+        # Hooks dir: per-container on modern podman, global on old podman
+        if info.hooks_dir_persists:
+            args += ["--hooks-dir", str(state.hooks_dir(sd))]
+        elif has_global_hooks():
+            self._audit.log_event(
+                container,
+                "setup",
+                detail=(
+                    f"podman {'.'.join(str(v) for v in info.version)}: "
+                    "using global hooks dir (--hooks-dir does not persist on restart)"
+                ),
+            )
+        else:
+            raise ShieldNeedsSetup(
+                f"Podman {'.'.join(str(v) for v in info.version)} detected.\n\n"
+                + global_hooks_hint()
+            )
+
+        args += [
             "--cap-drop",
             "NET_ADMIN",
             "--cap-drop",
@@ -200,17 +230,12 @@ class HookMode:
         ]
         return args
 
-    def _detect_rootless_network_mode(self) -> str:
-        """Detect pasta vs slirp4netns via the runner."""
-        output = self._runner.run(["podman", "info", "-f", "json"], check=False)
-        if not output:
-            return "pasta"
-        try:
-            info = json.loads(output)
-        except json.JSONDecodeError:
-            return "pasta"
-        cmd = info.get("host", {}).get("rootlessNetworkCmd", "")
-        return cmd if cmd in ("pasta", "slirp4netns") else "pasta"
+    def _get_podman_info(self) -> PodmanInfo:
+        """Get podman info, caching the result for the lifetime of this instance."""
+        if self._podman_info is None:
+            output = self._runner.run(["podman", "info", "-f", "json"], check=False)
+            self._podman_info = parse_podman_info(output)
+        return self._podman_info
 
     def _set_for_ip(self, ip: str) -> str:
         """Return the nft set name for an IP address."""
@@ -308,19 +333,40 @@ class HookMode:
         except ExecError:
             return ""
 
+    def _read_container_dns(self, container: str) -> str:
+        """Read DNS nameserver from a running container's resolv.conf."""
+        pid = self._runner.podman_inspect(container, "{{.State.Pid}}")
+        output = self._runner.run(
+            ["podman", "unshare", "nsenter", "-t", pid, "-m", "cat", "/etc/resolv.conf"],
+            check=False,
+        )
+        dns = parse_resolv_conf(output)
+        if not dns:
+            raise RuntimeError(
+                f"Cannot determine DNS for container {container}: no nameserver in resolv.conf"
+            )
+        return dns
+
+    def _container_ruleset(self, container: str) -> RulesetBuilder:
+        """Build a RulesetBuilder with the container's actual DNS address."""
+        dns = self._read_container_dns(container)
+        return RulesetBuilder(dns=dns, loopback_ports=self._config.loopback_ports)
+
     def shield_down(self, container: str, *, allow_all: bool = False) -> None:
         """Switch a running container to bypass mode."""
-        rs = self._ruleset.build_bypass(allow_all=allow_all)
+        ruleset = self._container_ruleset(container)
+        rs = ruleset.build_bypass(allow_all=allow_all)
         stdin = f"delete table {NFT_TABLE}\n{rs}"
         self._runner.nft_via_nsenter(container, stdin=stdin)
         output = self._runner.nft_via_nsenter(container, "list", "ruleset")
-        errors = self._ruleset.verify_bypass(output, allow_all=allow_all)
+        errors = ruleset.verify_bypass(output, allow_all=allow_all)
         if errors:
             raise RuntimeError(f"Bypass ruleset verification failed: {'; '.join(errors)}")
 
     def shield_up(self, container: str) -> None:
         """Restore normal deny-all mode for a running container."""
-        rs = self._ruleset.build_hook()
+        ruleset = self._container_ruleset(container)
+        rs = ruleset.build_hook()
         stdin = f"delete table {NFT_TABLE}\n{rs}"
         self._runner.nft_via_nsenter(container, stdin=stdin)
 
@@ -329,12 +375,12 @@ class HookMode:
         unique_ips = state.read_effective_ips(sd)
 
         if unique_ips:
-            elements_cmd = self._ruleset.add_elements_dual(unique_ips)
+            elements_cmd = ruleset.add_elements_dual(unique_ips)
             if elements_cmd:
                 self._runner.nft_via_nsenter(container, stdin=elements_cmd)
 
         output = self._runner.nft_via_nsenter(container, "list", "ruleset")
-        errors = self._ruleset.verify_hook(output)
+        errors = ruleset.verify_hook(output)
         if errors:
             raise RuntimeError(f"Ruleset verification failed: {'; '.join(errors)}")
 

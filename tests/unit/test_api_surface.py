@@ -22,6 +22,7 @@ EXPECTED_ALL = [
     "CommandDef",
     "CommandRunner",
     "DnsResolver",
+    "EnvironmentCheck",
     "ExecError",
     "NftNotFoundError",
     "ProfileLoader",
@@ -29,6 +30,7 @@ EXPECTED_ALL = [
     "Shield",
     "ShieldConfig",
     "ShieldMode",
+    "ShieldNeedsSetup",
     "ShieldState",
     "SubprocessRunner",
 ]

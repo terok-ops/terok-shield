@@ -70,6 +70,11 @@ def _handle_status(shield: Shield, *, container: str | None = None) -> None:
         print(f"Mode:     {status['mode']}")
         print(f"Audit:    {'enabled' if status['audit_enabled'] else 'disabled'}")
         print(f"Profiles: {', '.join(status['profiles']) or '(none)'}")
+        env = shield.check_environment()
+        if env.issues:
+            print()
+            for issue in env.issues:
+                print(f"  Warning: {issue}")
 
 
 def _handle_allow(shield: Shield, container: str, *, target: str) -> None:
@@ -124,6 +129,20 @@ def _handle_profiles(shield: Shield) -> None:
     """List available shield profiles."""
     for name in shield.profiles_list():
         print(name)
+
+
+def _handle_check_environment(shield: Shield) -> None:
+    """Check podman environment for compatibility issues."""
+    result = shield.check_environment()
+    if result.ok:
+        version_str = ".".join(str(v) for v in result.podman_version)
+        print(f"Environment OK (podman {version_str})")
+        return
+    for issue in result.issues:
+        print(f"  - {issue}")
+    if result.setup_hint:
+        print()
+        print(result.setup_hint)
 
 
 def _handle_preview(shield: Shield, *, down: bool = False, allow_all: bool = False) -> None:
@@ -231,6 +250,11 @@ COMMANDS: tuple[CommandDef, ...] = (
         name="profiles",
         help="List available shield profiles",
         handler=_handle_profiles,
+    ),
+    CommandDef(
+        name="check-environment",
+        help="Check podman environment for compatibility issues",
+        handler=_handle_check_environment,
     ),
     CommandDef(
         name="preview",

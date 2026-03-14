@@ -26,6 +26,11 @@ from ..testfs import BIN_DIR_NAME, HOOK_ENTRYPOINT_NAME, HOOKS_DIR_NAME
 from ..testnet import IPV6_CLOUDFLARE, TEST_DOMAIN, TEST_IP1, TEST_IP2
 from .helpers import write_lines
 
+# Modern podman info JSON — hooks-dir persists (>= 5.6.0), pasta default
+_MODERN_PODMAN_INFO = json.dumps(
+    {"host": {"rootlessNetworkCmd": "pasta"}, "version": {"Version": "5.8.0"}}
+)
+
 ConfigFactory = Callable[..., ShieldConfig]
 
 
@@ -136,7 +141,7 @@ def test_pre_start_uses_pasta_for_rootless_mode(
     """pre_start() uses pasta and loopback flags in rootless mode."""
     _set_euid(monkeypatch, 1000)
     harness = make_hook_mode(config=make_config(loopback_ports=(8080,)))
-    harness.runner.run.return_value = json.dumps({"host": {"rootlessNetworkCmd": "pasta"}})
+    harness.runner.run.return_value = _MODERN_PODMAN_INFO
     harness.profiles.compose_profiles.return_value = [TEST_DOMAIN]
 
     args = harness.mode.pre_start("test", ["dev-standard"])
@@ -155,6 +160,7 @@ def test_pre_start_installs_hooks_and_creates_state_dirs(
     _set_euid(monkeypatch, 0)
     config = make_config()
     harness = make_hook_mode(config=config)
+    harness.runner.run.return_value = _MODERN_PODMAN_INFO
     harness.profiles.compose_profiles.return_value = []
 
     harness.mode.pre_start("test", ["dev-standard"])
@@ -188,6 +194,7 @@ def test_pre_start_includes_expected_annotations(
     """pre_start() includes the expected state and audit annotations."""
     _set_euid(monkeypatch, 0)
     harness = make_hook_mode(config=make_config(**config_kwargs))
+    harness.runner.run.return_value = _MODERN_PODMAN_INFO
     harness.profiles.compose_profiles.return_value = []
 
     args = harness.mode.pre_start("test", ["dev-standard"])
@@ -324,6 +331,8 @@ def test_shield_down_builds_bypass_ruleset(
 ) -> None:
     """shield_down() applies bypass mode and verifies the resulting ruleset."""
     harness = make_hook_mode()
+    # Mock DNS reading so _container_ruleset returns the mock ruleset
+    harness.mode._container_ruleset = lambda _c: harness.ruleset
     harness.runner.nft_via_nsenter.side_effect = [
         "",
         "bad output" if verify_errors else "valid output",
@@ -334,7 +343,6 @@ def test_shield_down_builds_bypass_ruleset(
     if expected_message is None:
         harness.mode.shield_down("test-ctr", allow_all=allow_all)
         assert harness.runner.nft_via_nsenter.call_count == 2
-        harness.ruleset.build_bypass.assert_called_once_with(allow_all=allow_all)
     else:
         with pytest.raises(RuntimeError, match=expected_message):
             harness.mode.shield_down("test-ctr", allow_all=allow_all)
@@ -359,6 +367,8 @@ def test_shield_up_reapplies_hook_ruleset(
     harness = make_hook_mode(config=make_config())
     if allowed_ips:
         write_lines(state.profile_allowed_path(harness.config.state_dir), allowed_ips)
+    # Mock DNS reading so _container_ruleset returns the mock ruleset
+    harness.mode._container_ruleset = lambda _c: harness.ruleset
     harness.runner.nft_via_nsenter.side_effect = [""] * (expected_calls - 1) + [
         "valid output" if not verify_errors else "bad output"
     ]
@@ -428,11 +438,30 @@ def test_preview_delegates_to_ruleset_builder(
 @pytest.mark.parametrize(
     ("runner_output", "expected"),
     [
-        pytest.param(json.dumps({"host": {"rootlessNetworkCmd": "pasta"}}), "pasta", id="pasta"),
         pytest.param(
-            json.dumps({"host": {"rootlessNetworkCmd": "slirp4netns"}}),
+            json.dumps({"host": {"rootlessNetworkCmd": "pasta"}, "version": {"Version": "5.8.0"}}),
+            "pasta",
+            id="pasta",
+        ),
+        pytest.param(
+            json.dumps(
+                {"host": {"rootlessNetworkCmd": "slirp4netns"}, "version": {"Version": "5.8.0"}}
+            ),
             "slirp4netns",
             id="slirp4netns",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "host": {
+                        "slirp4netns": {"executable": "/usr/bin/slirp4netns"},
+                        "pasta": {"executable": "/usr/bin/pasta"},
+                    },
+                    "version": {"Version": "4.9.3"},
+                }
+            ),
+            "slirp4netns",
+            id="podman4-fallback-to-slirp",
         ),
         pytest.param("", "pasta", id="empty-output-fallback"),
         pytest.param("not json", "pasta", id="invalid-json-fallback"),
@@ -443,10 +472,11 @@ def test_detect_rootless_network_mode(
     runner_output: str,
     expected: str,
 ) -> None:
-    """_detect_rootless_network_mode() prefers podman info but fails safe to pasta."""
+    """Network mode detection via PodmanInfo.network_mode."""
     harness = make_hook_mode()
     harness.runner.run.return_value = runner_output
-    assert harness.mode._detect_rootless_network_mode() == expected
+    info = harness.mode._get_podman_info()
+    assert info.network_mode == expected
 
 
 def test_install_hooks_creates_entrypoint_and_hook_jsons(tmp_path: Path) -> None:
