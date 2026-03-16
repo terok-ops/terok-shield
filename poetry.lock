@@ -958,7 +958,7 @@ version = "0.1.0"
 description = "Shared MkDocs documentation generators for terok projects"
 optional = false
 python-versions = ">=3.12,<4.0"
-groups = ["docs", "test"]
+groups = ["docs"]
 files = [
     {file = "mkdocs_terok-0.1.0-py3-none-any.whl", hash = "sha256:eda0c1929bc6c92b7ec5b7edfbab4cc40f917b544aa612b61994f2ee271cda09"},
 ]
@@ -1289,7 +1289,7 @@ version = "6.0.3"
 description = "YAML parser and emitter for Python"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "dev", "docs", "test"]
+groups = ["main", "dev", "docs"]
 files = [
     {file = "PyYAML-6.0.3-cp38-cp38-macosx_10_13_x86_64.whl", hash = "sha256:c2514fceb77bc5e7a2f7adfaa1feb2fb311607c9cb518dbc378688ec73d8292f"},
     {file = "PyYAML-6.0.3-cp38-cp38-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9c57bb8c96f6d1808c030b1687b9b5fb476abaa47f0db9c0101f5e9f394e97f4"},
@@ -1771,4 +1771,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "4348ad510091d3b82f37d9fbe8c243ef77007f2a6c4b0f273ff2b29f5eeb93b8"
+content-hash = "efb1b166b9098a4e234212f35cd7643dfe4ee8a45c3dd07ef275b41b2fe804fc"
