@@ -339,16 +339,20 @@ def test_shield_down_builds_bypass_ruleset(
     harness = make_hook_mode()
     # Mock DNS reading so _container_ruleset returns the mock ruleset
     harness.mode._container_ruleset = lambda _c: harness.ruleset
+    # shield_state() call (list_rules) + apply + verify
     harness.runner.nft_via_nsenter.side_effect = [
-        "",
-        "bad output" if verify_errors else "valid output",
+        "table inet terok_shield {}",  # shield_state() → list_rules
+        "",  # apply bypass ruleset
+        "bad output" if verify_errors else "valid output",  # verify
     ]
     harness.ruleset.build_bypass.return_value = "bypass ruleset"
     harness.ruleset.verify_bypass.return_value = verify_errors
+    # shield_state() uses verify_bypass/verify_hook to classify
+    harness.ruleset.verify_hook.return_value = []
 
     if expected_message is None:
         harness.mode.shield_down("test-ctr", allow_all=allow_all)
-        assert harness.runner.nft_via_nsenter.call_count == 2
+        assert harness.runner.nft_via_nsenter.call_count == 3
     else:
         with pytest.raises(RuntimeError, match=expected_message):
             harness.mode.shield_down("test-ctr", allow_all=allow_all)
@@ -357,9 +361,9 @@ def test_shield_down_builds_bypass_ruleset(
 @pytest.mark.parametrize(
     ("allowed_ips", "verify_errors", "expected_calls"),
     [
-        pytest.param([], [], 2, id="no-cached-ips"),
-        pytest.param([TEST_IP1], [], 3, id="readds-cached-ips"),
-        pytest.param([], ["error"], 2, id="verification-failure"),
+        pytest.param([], [], 3, id="no-cached-ips"),
+        pytest.param([TEST_IP1], [], 4, id="readds-cached-ips"),
+        pytest.param([], ["error"], 3, id="verification-failure"),
     ],
 )
 def test_shield_up_reapplies_hook_ruleset(
@@ -375,14 +379,20 @@ def test_shield_up_reapplies_hook_ruleset(
         write_lines(state.profile_allowed_path(harness.config.state_dir), allowed_ips)
     # Mock DNS reading so _container_ruleset returns the mock ruleset
     harness.mode._container_ruleset = lambda _c: harness.ruleset
-    harness.runner.nft_via_nsenter.side_effect = [""] * (expected_calls - 1) + [
-        "valid output" if not verify_errors else "bad output"
+    # shield_state() call (list_rules) returns existing table (UP state)
+    harness.runner.nft_via_nsenter.side_effect = [
+        "table inet terok_shield {}",  # shield_state() → list_rules
+        *[""] * (expected_calls - 2),  # apply + optional elements
+        "valid output" if not verify_errors else "bad output",  # verify
     ]
     harness.ruleset.build_hook.return_value = "hook ruleset"
     harness.ruleset.verify_hook.return_value = verify_errors
     harness.ruleset.add_elements_dual.return_value = (
         f"add element {TEST_IP1}" if allowed_ips else ""
     )
+    # For shield_state() classification — report UP so delete table is prepended
+    harness.ruleset.verify_bypass.return_value = ["not bypass"]
+
     if verify_errors:
         with pytest.raises(RuntimeError):
             harness.mode.shield_up("test-ctr")
@@ -680,6 +690,28 @@ def test_shield_up_on_inactive_applies_without_delete(
     harness.ruleset.add_elements_dual.return_value = ""
 
     harness.mode.shield_up("test-ctr")
+
+    # On an empty netns there is nothing to delete — no call should contain "delete table"
+    for call in harness.runner.nft_via_nsenter.call_args_list:
+        assert "delete" not in call.kwargs.get("stdin", "")
+
+
+def test_shield_down_on_inactive_applies_without_delete(
+    make_hook_mode: HookModeHarnessFactory,
+) -> None:
+    """shield_down() on INACTIVE netns applies bypass ruleset without delete table prefix."""
+    harness = make_hook_mode()
+    harness.mode._container_ruleset = lambda _c: harness.ruleset
+    # shield_state() → list_rules returns empty (INACTIVE)
+    harness.runner.nft_via_nsenter.side_effect = [
+        "",  # shield_state() → INACTIVE
+        "",  # apply bypass ruleset (no delete prefix)
+        "valid output",  # verify
+    ]
+    harness.ruleset.build_bypass.return_value = "bypass ruleset"
+    harness.ruleset.verify_bypass.return_value = []
+
+    harness.mode.shield_down("test-ctr", allow_all=False)
 
     # On an empty netns there is nothing to delete — no call should contain "delete table"
     for call in harness.runner.nft_via_nsenter.call_args_list:
