@@ -242,7 +242,7 @@ class HookMode:
                 ]
             else:
                 tcp_flags = ",".join(f"-T,{p}" for p in self._config.loopback_ports)
-                pasta_arg = f"pasta:{tcp_flags}" if tcp_flags else "pasta"
+                pasta_arg = f"pasta:-t,auto,-u,auto,{tcp_flags},-U,auto" if tcp_flags else "pasta"
                 args += [
                     "--network",
                     pasta_arg,
