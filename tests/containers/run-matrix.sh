@@ -58,6 +58,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --build-only   Build images without running tests"
+    echo "  --no-cache     Rebuild images from scratch (ignore layer cache)"
     echo "  --list         List available distros"
     echo "  --unit-only    Run only unit tests (fast)"
     echo "  --integ-only   Run only integration tests"
@@ -73,9 +74,12 @@ build_image() {
     local name="$1"
     local file="$SCRIPT_DIR/Containerfile.${DISTROS[$name]}"
     local image="$IMAGE_PREFIX:$name"
+    local -a build_args=()
+
+    $NO_CACHE && build_args+=(--no-cache)
 
     echo "==> Building $image from $file"
-    podman build -t "$image" -f "$file" "$REPO_ROOT"
+    podman build "${build_args[@]}" -t "$image" -f "$file" "$REPO_ROOT"
     return $?
 }
 
@@ -189,12 +193,14 @@ run_tests() {
 
 BUILD_ONLY=false
 LIST_ONLY=false
+NO_CACHE=false
 TEST_SCOPE="all"
 TARGETS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build-only) BUILD_ONLY=true ;;
+        --no-cache) NO_CACHE=true ;;
         --list) LIST_ONLY=true ;;
         --unit-only)
             [[ "$TEST_SCOPE" != "all" ]] && { echo "Error: --unit-only and --integ-only are mutually exclusive" >&2; exit 1; }
