@@ -81,9 +81,9 @@ run_tests() {
     echo ""
 
     # The matrix runner is the full-quality environment:
-    # install ALL infrastructure, run ALL tests. The needs_* markers
-    # are for degraded environments (CI, dev machines) — here we want
-    # maximum coverage across distros and podman versions.
+    # install ALL infrastructure, run ALL tests as a rootless user.
+    # Privileged mode gives the outer container the capabilities needed
+    # for nested podman, but tests run as uid 1000 (rootless podman).
     podman run --rm --name "$ctr_name" \
         --privileged \
         --security-opt label=disable \
@@ -91,64 +91,78 @@ run_tests() {
         "$image" \
         bash -c "
             set -e
-            echo '--- podman version ---'
-            podman --version || echo 'podman not available'
+
+            # ── Create a rootless test user ──
+            # Tests must run as non-root to exercise rootless podman,
+            # which is the shield's primary deployment model.
+            useradd -m -s /bin/bash testrunner 2>/dev/null || true
+            echo 'testrunner:100000:65536' >> /etc/subuid
+            echo 'testrunner:100000:65536' >> /etc/subgid
 
             cp -a $SOURCE_MOUNT $WORKSPACE_DIR
-            cd $WORKSPACE_DIR
+            chown -R testrunner:testrunner $WORKSPACE_DIR
 
-            if command -v uv &>/dev/null; then
-                uv venv --python $PYTHON_VERSION .venv
-                . .venv/bin/activate
-                uv pip install poetry
-            else
-                python\${PYTHON_VERSION} -m venv .venv 2>/dev/null \
-                    || python3 -m venv .venv
-                . .venv/bin/activate
-                pip install --quiet --upgrade pip
-                pip install --quiet poetry
-            fi
+            # Run the rest as the rootless user
+            su - testrunner -c '
+                set -e
+                cd $WORKSPACE_DIR
 
-            echo '--- python version ---'
-            python --version
-            poetry install --with test --no-interaction
-            echo '--- deps installed ---'
+                echo \"--- podman version ---\"
+                podman --version || echo \"podman not available\"
 
-            # ── Infrastructure setup ──
-            echo ''
-            echo '--- installing shield hooks ---'
-            poetry run terok-shield setup --user
+                if command -v uv &>/dev/null; then
+                    uv venv --python $PYTHON_VERSION .venv
+                    . .venv/bin/activate
+                    uv pip install poetry
+                else
+                    python${PYTHON_VERSION} -m venv .venv 2>/dev/null \
+                        || python3 -m venv .venv
+                    . .venv/bin/activate
+                    pip install --quiet --upgrade pip
+                    pip install --quiet poetry
+                fi
 
-            echo ''
-            echo '--- check-environment ---'
-            poetry run terok-shield check-environment 2>&1 || true
+                echo \"--- python version ---\"
+                python --version
+                poetry install --with test --no-interaction
+                echo \"--- deps installed ---\"
 
-            # ── Test execution ──
-            case '$test_scope' in
-                unit)
-                    echo ''
-                    echo '--- unit tests ---'
-                    poetry run pytest tests/unit/ -v --tb=short
-                    ;;
-                integ)
-                    echo ''
-                    echo '--- integration tests (all markers) ---'
-                    poetry run pytest tests/integration/ -v --tb=short
-                    ;;
-                all)
-                    _rc=0
+                # ── Infrastructure setup ──
+                echo \"\"
+                echo \"--- installing shield hooks ---\"
+                poetry run terok-shield setup --user
 
-                    echo ''
-                    echo '--- unit tests ---'
-                    poetry run pytest tests/unit/ -v --tb=short || _rc=\$?
+                echo \"\"
+                echo \"--- check-environment ---\"
+                poetry run terok-shield check-environment 2>&1 || true
 
-                    echo ''
-                    echo '--- integration tests (all markers) ---'
-                    poetry run pytest tests/integration/ -v --tb=short || { [ \$_rc -eq 0 ] && _rc=\$?; }
+                # ── Test execution ──
+                case \"$test_scope\" in
+                    unit)
+                        echo \"\"
+                        echo \"--- unit tests ---\"
+                        poetry run pytest tests/unit/ -v --tb=short
+                        ;;
+                    integ)
+                        echo \"\"
+                        echo \"--- integration tests (all markers) ---\"
+                        poetry run pytest tests/integration/ -v --tb=short
+                        ;;
+                    all)
+                        _rc=0
 
-                    exit \$_rc
-                    ;;
-            esac
+                        echo \"\"
+                        echo \"--- unit tests ---\"
+                        poetry run pytest tests/unit/ -v --tb=short || _rc=\$?
+
+                        echo \"\"
+                        echo \"--- integration tests (all markers) ---\"
+                        poetry run pytest tests/integration/ -v --tb=short || { _integ_rc=\$?; [ \$_rc -eq 0 ] && _rc=\$_integ_rc; }
+
+                        exit \$_rc
+                        ;;
+                esac
+            '
         "
 
     local status=$?
