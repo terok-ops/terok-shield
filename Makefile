@@ -1,4 +1,4 @@
-.PHONY: all lint format test test-unit ruff-report bandit-report sonar-inputs test-integration-host test-integration-network test-integration-podman test-integration test-integration-map test-matrix test-matrix-build ci-map tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
+.PHONY: all lint format test test-unit ruff-report bandit-report sonar-inputs test-integration-host test-integration-network test-integration-podman test-integration test-integration-map test-matrix ci-map tach security docstrings complexity deadcode reuse check install install-dev docs docs-build clean spdx
 
 REPORTS_DIR ?= reports
 COVERAGE_XML ?= $(REPORTS_DIR)/coverage.xml
@@ -64,11 +64,18 @@ test-integration:
 	poetry run pytest tests/integration/ -v --junitxml=$(INTEGRATION_JUNIT_XML) -o junit_family=legacy
 
 # Multi-distro integration test matrix (Debian 12/13, Ubuntu 24.04, Fedora 43)
+# Options (env vars):
+#   NO_CACHE=1    Rebuild images from scratch (ignore layer cache)
+#   BUILD_ONLY=1  Build images without running tests
+#   SCOPE=unit    Run only unit tests (or: integ)
+#   DISTROS="fedora43 debian13"  Run specific distros only
 test-matrix:
-	./tests/containers/run-matrix.sh
-
-test-matrix-build:
-	./tests/containers/run-matrix.sh --build-only
+	./tests/containers/run-matrix.sh \
+		$(if $(NO_CACHE),--no-cache) \
+		$(if $(BUILD_ONLY),--build-only) \
+		$(if $(filter unit,$(SCOPE)),--unit-only) \
+		$(if $(filter integ,$(SCOPE)),--integ-only) \
+		$(DISTROS)
 
 # Generate integration test map (Markdown table grouped by directory)
 test-integration-map:
