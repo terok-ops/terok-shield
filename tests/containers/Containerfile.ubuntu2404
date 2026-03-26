@@ -12,11 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Rootless test user with subordinate UID/GID ranges
 # (uidmap on Debian/Ubuntu ships newuidmap with setuid — no caps restore needed)
-RUN useradd -u 1000 -m testrunner \
+RUN useradd -m testrunner \
     && echo "testrunner:100000:65536" >> /etc/subuid \
     && echo "testrunner:100000:65536" >> /etc/subgid \
-    && mkdir -p /run/user/1000 \
-    && chown testrunner:testrunner /run/user/1000
+    && mkdir -p /run/user/$(id -u testrunner) \
+    && chown testrunner:testrunner /run/user/$(id -u testrunner)
 
 # Configure podman for nested rootless operation
 RUN mkdir -p /etc/containers \

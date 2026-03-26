@@ -12,6 +12,6 @@ RUN dnf install -y \
     && dnf clean all
 
 # Ensure runtime dir exists for the pre-existing 'podman' user
-RUN mkdir -p /run/user/1000 && chown podman:podman /run/user/1000
+RUN mkdir -p /run/user/$(id -u podman) && chown podman:podman /run/user/$(id -u podman)
 
 WORKDIR /src
