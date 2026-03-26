@@ -140,6 +140,15 @@ run_tests() {
                 podman info --format \"podman={{.Version.Version}} storage={{.Store.GraphDriverName}}\" \
                     || { echo \"FATAL: rootless podman not functional\" >&2; exit 1; }
 
+                echo \"--- dns diagnostic ---\"
+                echo \"resolv.conf:\"
+                cat /etc/resolv.conf
+                echo \"dig +short github.com A:\"
+                dig +short github.com A 2>&1 || echo \"dig exit=\$?\"
+                echo \"getent hosts github.com:\"
+                getent hosts github.com 2>&1 || echo \"getent exit=\$?\"
+                echo \"---\"
+
                 if command -v uv >/dev/null 2>&1; then
                     uv venv --python $PYTHON_VERSION .venv
                     . .venv/bin/activate
