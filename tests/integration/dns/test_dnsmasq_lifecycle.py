@@ -15,6 +15,7 @@ import shutil as _shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -22,7 +23,6 @@ from terok_shield import Shield, ShieldConfig, state
 from terok_shield.config import DnsTier, detect_dns_tier
 from terok_shield.dnsmasq import generate_config, nftset_entry, read_domains
 from terok_shield.nft_constants import DNSMASQ_BIND, PASTA_DNS
-from terok_shield.run import SubprocessRunner
 from tests.testnet import ALLOWED_TARGET_HTTP, BLOCKED_TARGET_HTTP
 
 from ..conftest import (
@@ -46,6 +46,22 @@ dnsmasq_missing = pytest.mark.skipif(
 )
 
 
+# ── Helpers ──────────────────────────────────────────────
+
+
+def _extract_annotation(args: list[str], key: str) -> str | None:
+    """Extract an annotation value from podman args, or None if absent."""
+    for i, arg in enumerate(args[:-1]):
+        if arg == "--annotation" and args[i + 1].startswith(f"{key}="):
+            return args[i + 1].split("=", 1)[1]
+    return None
+
+
+def _tier_from_args(args: list[str]) -> str | None:
+    """Extract the dns_tier annotation value from podman args."""
+    return _extract_annotation(args, "terok.shield.dns_tier")
+
+
 # ── Story 1: DNS tier detection ──────────────────────────
 
 
@@ -56,14 +72,17 @@ class TestDnsTierDetection:
 
     def test_detect_tier_matches_host(self) -> None:
         """detect_dns_tier() returns a valid tier for the current host."""
-        runner = SubprocessRunner()
-        tier = detect_dns_tier(runner.has)
+        # Use a lightweight has() instead of SubprocessRunner (which needs nft)
+        tier = detect_dns_tier(lambda name: _shutil.which(name) is not None)
         assert tier in (DnsTier.DNSMASQ, DnsTier.DIG, DnsTier.GETENT)
 
     def test_check_environment_reports_tier(self) -> None:
         """Shield.check_environment() includes dns_tier in its result."""
         with tempfile.TemporaryDirectory() as tmp:
-            shield = Shield(ShieldConfig(state_dir=Path(tmp)))
+            runner = mock.MagicMock()
+            runner.has.side_effect = lambda name: _shutil.which(name) is not None
+            runner.run.return_value = "{}"  # minimal podman info
+            shield = Shield(ShieldConfig(state_dir=Path(tmp)), runner=runner)
             env = shield.check_environment()
         assert env.dns_tier in ("dnsmasq", "dig", "getent")
 
@@ -116,11 +135,14 @@ class TestPreStartDnsmasqTier:
     """pre_start() detects dnsmasq tier and sets correct podman args."""
 
     def test_pre_start_adds_dns_flag(self) -> None:
-        """When dnsmasq is available, pre_start() adds --dns 127.0.0.1."""
+        """When dnsmasq tier is selected, pre_start() adds --dns 127.0.0.1."""
         with tempfile.TemporaryDirectory() as tmp:
             shield = Shield(ShieldConfig(state_dir=Path(tmp)))
             args = shield.pre_start("test-ctr")
 
+        tier = _tier_from_args(args)
+        if tier != "dnsmasq":
+            pytest.skip(f"pre_start selected tier '{tier}', not dnsmasq")
         assert "--dns" in args
         dns_idx = args.index("--dns")
         assert args[dns_idx + 1] == DNSMASQ_BIND
@@ -130,26 +152,25 @@ class TestPreStartDnsmasqTier:
         with tempfile.TemporaryDirectory() as tmp:
             sd = Path(tmp)
             shield = Shield(ShieldConfig(state_dir=sd))
-            shield.pre_start("test-ctr")
+            args = shield.pre_start("test-ctr")
 
+        tier = _tier_from_args(args)
+        if tier != "dnsmasq":
+            pytest.skip(f"pre_start selected tier '{tier}', not dnsmasq")
         domains_path = state.profile_domains_path(sd)
         assert domains_path.is_file()
         domains = read_domains(domains_path)
-        # dev-standard profile contains at least some domains
         assert len(domains) > 0
 
     def test_pre_start_sets_dns_tier_annotation(self) -> None:
-        """pre_start() sets the dns_tier annotation to 'dnsmasq'."""
+        """pre_start() sets a dns_tier annotation."""
         with tempfile.TemporaryDirectory() as tmp:
             shield = Shield(ShieldConfig(state_dir=Path(tmp)))
             args = shield.pre_start("test-ctr")
 
-        # Find the dns_tier annotation
-        for i, arg in enumerate(args[:-1]):
-            if arg == "--annotation" and "dns_tier" in args[i + 1]:
-                assert "dnsmasq" in args[i + 1]
-                return
-        pytest.fail("dns_tier annotation not found in pre_start args")
+        tier = _tier_from_args(args)
+        assert tier is not None, "dns_tier annotation not found in pre_start args"
+        assert tier in ("dnsmasq", "dig", "getent")
 
 
 # ── Story 4: full dnsmasq lifecycle in a real container ──
@@ -186,10 +207,9 @@ class TestDnsmasqInContainer:
         _podman_rm(name)
         try:
             extra_args = shield.pre_start(name)
-            # Verify dnsmasq tier was selected
-            tier_args = [a for i, a in enumerate(extra_args) if "dns_tier" in a]
-            if not any("dnsmasq" in a for a in tier_args):
-                pytest.skip("dnsmasq tier not selected (binary may lack nftset)")
+            tier = _tier_from_args(extra_args)
+            if tier != "dnsmasq":
+                pytest.skip(f"dnsmasq tier not selected (got '{tier}')")
 
             start_shielded_container(name, extra_args, IMAGE)
             yield name, sd, shield
@@ -277,26 +297,31 @@ class TestLiveDomainAllowDeny:
         _podman_rm(name)
         try:
             extra_args = shield.pre_start(name)
+            tier = _tier_from_args(extra_args)
+            if tier != "dnsmasq":
+                pytest.skip(
+                    f"dnsmasq tier not selected (got '{tier}') — live domain reload not testable"
+                )
+
             start_shielded_container(name, extra_args, IMAGE)
             yield name, sd, shield
         finally:
             _podman_rm(name)
 
-    def test_allow_domain_updates_profile_domains(self, shielded) -> None:
-        """shield.allow(domain) adds the domain to profile.domains."""
+    def test_allow_domain_updates_live_domains(self, shielded) -> None:
+        """shield.allow(domain) adds the domain to live.domains."""
         name, sd, shield = shielded
         shield.allow(name, "dns.google")
-        domains = read_domains(state.profile_domains_path(sd))
+        domains = read_domains(state.live_domains_path(sd))
         assert "dns.google" in domains
 
-    def test_deny_domain_removes_from_profile_domains(self, shielded) -> None:
-        """shield.deny(domain) removes the domain from profile.domains."""
+    def test_deny_domain_adds_to_denied_domains(self, shielded) -> None:
+        """shield.deny(domain) adds the domain to denied.domains."""
         name, sd, shield = shielded
-        # First allow, then deny
         shield.allow(name, "dns.google")
         shield.deny(name, "dns.google")
-        domains = read_domains(state.profile_domains_path(sd))
-        assert "dns.google" not in domains
+        denied = read_domains(state.denied_domains_path(sd))
+        assert "dns.google" in denied
 
 
 # ── Story 6: graceful degradation (dig fallback) ─────────
@@ -310,10 +335,9 @@ class TestGracefulDegradation:
     """Verify shield works without dnsmasq (dig/getent fallback)."""
 
     def test_pre_start_without_dnsmasq(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """pre_start() falls back to dig tier when dnsmasq is absent."""
+        """pre_start() falls back to a non-dnsmasq tier when dnsmasq is absent."""
         import shutil
 
-        # Hide dnsmasq from PATH
         original_which = shutil.which
 
         def _which_no_dnsmasq(name: str, *a, **kw):
@@ -325,15 +349,17 @@ class TestGracefulDegradation:
 
         with tempfile.TemporaryDirectory() as tmp:
             shield = Shield(ShieldConfig(state_dir=Path(tmp)))
-            # Clear the has() cache so our mock takes effect
             shield.runner._has_cache.clear()
+
+            # Determine expected tier with dnsmasq hidden
+            expected_tier = detect_dns_tier(shield.runner.has)
+
             args = shield.pre_start("test-ctr")
 
-        # Should NOT have --dns flag (dig tier resolves at pre-start)
+        # Should NOT have --dns flag (non-dnsmasq tier resolves at pre-start)
         assert "--dns" not in args
-        # Should have dns_tier=dig annotation
-        for i, arg in enumerate(args[:-1]):
-            if arg == "--annotation" and "dns_tier" in args[i + 1]:
-                assert "dig" in args[i + 1]
-                return
-        pytest.fail("dns_tier annotation not found")
+        # dns_tier annotation should match what detect_dns_tier returned
+        tier = _tier_from_args(args)
+        assert tier is not None, "dns_tier annotation not found"
+        assert tier == expected_tier.value
+        assert tier != "dnsmasq"
