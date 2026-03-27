@@ -420,6 +420,14 @@ def hook_main(stdin_data: str | None = None, stage: str = "createRuntime") -> in
             dns = _read_container_dns(pid)
         gateway = _read_container_gateway(pid)
 
+        # Validate before persisting — don't write unvalidated annotation data to disk.
+        # safe_ip() validates dns; dns_tier_str is checked against the enum.
+        from .nft import safe_ip
+
+        safe_ip(dns)
+        if dns_tier_str and dns_tier_str not in {t.value for t in DnsTier}:
+            raise RuntimeError(f"Invalid dns_tier annotation: {dns_tier_str!r}")
+
         # Persist upstream DNS so shield_up/shield_down can rebuild rules correctly
         # (resolv.conf will be rewritten to 127.0.0.1 when dnsmasq is active)
         state.upstream_dns_path(sd).write_text(f"{dns}\n")

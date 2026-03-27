@@ -166,17 +166,20 @@ def _read_pid(state_dir: Path) -> int | None:
         return None
 
 
-def _is_dnsmasq_pid(pid_int: int) -> bool:
-    """Return True if the given PID belongs to a dnsmasq process.
+def _is_our_dnsmasq(pid_int: int, state_dir: Path) -> bool:
+    """Return True if the PID belongs to *this container's* dnsmasq.
 
-    Checks ``/proc/{pid}/cmdline`` for the ``dnsmasq`` command name.
-    Returns False if the process does not exist or is not dnsmasq.
+    Checks ``/proc/{pid}/cmdline`` for both the ``dnsmasq`` binary name
+    AND the ``--conf-file=`` path pointing to our state directory.
+    This prevents accidentally signaling a host-level dnsmasq or another
+    container's dnsmasq instance after PID recycling.
     """
+    conf_marker = str(state.dnsmasq_conf_path(state_dir)).encode()
     try:
         cmdline = Path(f"/proc/{pid_int}/cmdline").read_bytes()
     except OSError:
         return False
-    return b"dnsmasq" in cmdline
+    return b"dnsmasq" in cmdline and conf_marker in cmdline
 
 
 def _clear_pid_file(state_dir: Path) -> None:
@@ -202,7 +205,7 @@ def kill(state_dir: Path) -> None:
     pid_int = _read_pid(state_dir)
     if pid_int is None:
         return
-    if not _is_dnsmasq_pid(pid_int):
+    if not _is_our_dnsmasq(pid_int, state_dir):
         _clear_pid_file(state_dir)
         return
     try:
@@ -231,7 +234,7 @@ def reload(state_dir: Path, upstream_dns: str, domains: list[str]) -> None:
     if pid_int is None:
         return
 
-    if not _is_dnsmasq_pid(pid_int):
+    if not _is_our_dnsmasq(pid_int, state_dir):
         _clear_pid_file(state_dir)
         raise RuntimeError(
             f"PID {pid_int} is not dnsmasq (stale PID file) — container DNS is broken. "

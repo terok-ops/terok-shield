@@ -737,7 +737,7 @@ class TestDomainOperations:
         state.dnsmasq_pid_path(sd).write_text("12345\n")
 
         with (
-            mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
             mock.patch("terok_shield.dnsmasq.os.kill"),
         ):
             harness.mode.allow_domain(TEST_DOMAIN)
@@ -766,7 +766,7 @@ class TestDomainOperations:
         state.dnsmasq_pid_path(sd).write_text("12345\n")
 
         with (
-            mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
             mock.patch("terok_shield.dnsmasq.os.kill"),
         ):
             harness.mode.deny_domain(TEST_DOMAIN)
@@ -879,7 +879,7 @@ class TestDenyDomainWithReload:
         state.dnsmasq_pid_path(sd).write_text("12345\n")
 
         with (
-            mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
             mock.patch("terok_shield.dnsmasq.os.kill"),
         ):
             harness.mode.deny_domain(TEST_DOMAIN)

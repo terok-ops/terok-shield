@@ -175,34 +175,45 @@ def test_launch_maps_exec_error_to_runtime_error(tmp_path: Path) -> None:
         launch(runner, "42", tmp_path, PASTA_DNS, [TEST_DOMAIN])
 
 
-# ── _is_dnsmasq_pid / _clear_pid_file ────────────────────
+# ── _is_our_dnsmasq / _clear_pid_file ────────────────────
 
 
-def test_is_dnsmasq_pid_true(tmp_path: Path) -> None:
-    """_is_dnsmasq_pid returns True when /proc/{pid}/cmdline contains 'dnsmasq'."""
-    from terok_shield.dnsmasq import _is_dnsmasq_pid
+def test_is_our_dnsmasq_true(tmp_path: Path) -> None:
+    """_is_our_dnsmasq returns True when cmdline contains dnsmasq + our conf-file."""
+    from terok_shield.dnsmasq import _is_our_dnsmasq
+
+    conf_path = str(state.dnsmasq_conf_path(tmp_path))
+    fake_proc = tmp_path / "cmdline"
+    fake_proc.write_bytes(f"dnsmasq\x00--conf-file={conf_path}\x00".encode())
+    with mock.patch("terok_shield.dnsmasq.Path", return_value=fake_proc):
+        assert _is_our_dnsmasq(12345, tmp_path) is True
+
+
+def test_is_our_dnsmasq_false_different_container(tmp_path: Path) -> None:
+    """_is_our_dnsmasq returns False for another container's dnsmasq."""
+    from terok_shield.dnsmasq import _is_our_dnsmasq
 
     fake_proc = tmp_path / "cmdline"
-    fake_proc.write_bytes(b"dnsmasq\x00--conf-file=/tmp/x\x00")
+    fake_proc.write_bytes(b"dnsmasq\x00--conf-file=/other/state/dnsmasq.conf\x00")
     with mock.patch("terok_shield.dnsmasq.Path", return_value=fake_proc):
-        assert _is_dnsmasq_pid(12345) is True
+        assert _is_our_dnsmasq(12345, tmp_path) is False
 
 
-def test_is_dnsmasq_pid_false_different_process(tmp_path: Path) -> None:
-    """_is_dnsmasq_pid returns False when cmdline is a different process."""
-    from terok_shield.dnsmasq import _is_dnsmasq_pid
+def test_is_our_dnsmasq_false_different_process(tmp_path: Path) -> None:
+    """_is_our_dnsmasq returns False when cmdline is not dnsmasq."""
+    from terok_shield.dnsmasq import _is_our_dnsmasq
 
     fake_proc = tmp_path / "cmdline"
     fake_proc.write_bytes(b"nginx\x00-g\x00daemon off;\x00")
     with mock.patch("terok_shield.dnsmasq.Path", return_value=fake_proc):
-        assert _is_dnsmasq_pid(12345) is False
+        assert _is_our_dnsmasq(12345, tmp_path) is False
 
 
-def test_is_dnsmasq_pid_false_missing_proc() -> None:
-    """_is_dnsmasq_pid returns False when /proc/{pid} doesn't exist."""
-    from terok_shield.dnsmasq import _is_dnsmasq_pid
+def test_is_our_dnsmasq_false_missing_proc(tmp_path: Path) -> None:
+    """_is_our_dnsmasq returns False when /proc/{pid} doesn't exist."""
+    from terok_shield.dnsmasq import _is_our_dnsmasq
 
-    assert _is_dnsmasq_pid(999999999) is False
+    assert _is_our_dnsmasq(999999999, tmp_path) is False
 
 
 def test_clear_pid_file_removes_file(tmp_path: Path) -> None:
@@ -229,7 +240,7 @@ def test_kill_sends_sigterm(tmp_path: Path) -> None:
     state.dnsmasq_pid_path(tmp_path).write_text("12345\n")
 
     with (
-        mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+        mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
         mock.patch("terok_shield.dnsmasq.os.kill") as mock_kill,
     ):
         kill(tmp_path)
@@ -249,7 +260,7 @@ def test_kill_silently_ignores_stale_pid(tmp_path: Path) -> None:
     state.dnsmasq_pid_path(tmp_path).write_text("99999\n")
 
     with (
-        mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+        mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
         mock.patch("terok_shield.dnsmasq.os.kill", side_effect=ProcessLookupError),
     ):
         kill(tmp_path)  # should not raise
@@ -259,7 +270,7 @@ def test_kill_clears_stale_pid_file(tmp_path: Path) -> None:
     """kill() clears PID file when PID is not a dnsmasq process."""
     state.dnsmasq_pid_path(tmp_path).write_text("12345\n")
 
-    with mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=False):
+    with mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=False):
         kill(tmp_path)
 
     assert not state.dnsmasq_pid_path(tmp_path).is_file()
@@ -378,7 +389,7 @@ def test_reload_regenerates_config_and_sends_sighup(tmp_path: Path) -> None:
     state.dnsmasq_pid_path(tmp_path).write_text("12345\n")
 
     with (
-        mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+        mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
         mock.patch("terok_shield.dnsmasq.os.kill") as mock_kill,
     ):
         reload(tmp_path, PASTA_DNS, [TEST_DOMAIN])
@@ -404,7 +415,7 @@ def test_reload_raises_on_stale_pid(tmp_path: Path) -> None:
     state.ensure_state_dirs(tmp_path)
     state.dnsmasq_pid_path(tmp_path).write_text("12345\n")
 
-    with mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=False):
+    with mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=False):
         with pytest.raises(RuntimeError, match="not dnsmasq"):
             reload(tmp_path, PASTA_DNS, [TEST_DOMAIN])
 
@@ -415,7 +426,7 @@ def test_reload_raises_on_dead_process(tmp_path: Path) -> None:
     state.dnsmasq_pid_path(tmp_path).write_text("12345\n")
 
     with (
-        mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+        mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
         mock.patch("terok_shield.dnsmasq.os.kill", side_effect=ProcessLookupError),
     ):
         with pytest.raises(RuntimeError, match="dead"):
