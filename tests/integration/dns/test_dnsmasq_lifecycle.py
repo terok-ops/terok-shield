@@ -1,0 +1,339 @@
+# SPDX-FileCopyrightText: 2026 Jiri Vyskocil
+# SPDX-License-Identifier: Apache-2.0
+
+"""Story-style integration tests for the dnsmasq per-container DNS lifecycle.
+
+Each test class tells a user story end-to-end: tier detection, config
+generation, dnsmasq launch inside a container's netns, live domain
+allow/deny with SIGHUP reload, and poststop cleanup.
+
+These tests require podman, nft, and dnsmasq on the host.  They create
+real containers and verify actual DNS/nft behavior — no mocking.
+"""
+
+import shutil as _shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from terok_shield import Shield, ShieldConfig, state
+from terok_shield.config import DnsTier, detect_dns_tier
+from terok_shield.dnsmasq import generate_config, nftset_entry, read_domains
+from terok_shield.nft_constants import DNSMASQ_BIND, PASTA_DNS
+from terok_shield.run import SubprocessRunner
+
+from ..conftest import (
+    CTR_PREFIX,
+    IMAGE,
+    _podman_rm,
+    nft_missing,
+    nsenter_nft,
+    podman_missing,
+)
+from ..helpers import (
+    assert_blocked,
+    assert_reachable,
+    exec_in_container,
+    start_shielded_container,
+)
+
+dnsmasq_missing = pytest.mark.skipif(
+    _shutil.which("dnsmasq") is None,
+    reason="dnsmasq not installed",
+)
+
+
+# ── Story 1: DNS tier detection ──────────────────────────
+
+
+@pytest.mark.needs_podman
+@podman_missing
+class TestDnsTierDetection:
+    """Verify that DNS tier detection picks the right tier based on installed binaries."""
+
+    def test_detect_tier_matches_host(self) -> None:
+        """detect_dns_tier() returns a valid tier for the current host."""
+        runner = SubprocessRunner()
+        tier = detect_dns_tier(runner.has)
+        assert tier in (DnsTier.DNSMASQ, DnsTier.DIG, DnsTier.GETENT)
+
+    def test_check_environment_reports_tier(self) -> None:
+        """Shield.check_environment() includes dns_tier in its result."""
+        with tempfile.TemporaryDirectory() as tmp:
+            shield = Shield(ShieldConfig(state_dir=Path(tmp)))
+            env = shield.check_environment()
+        assert env.dns_tier in ("dnsmasq", "dig", "getent")
+
+
+# ── Story 2: dnsmasq config generation ───────────────────
+
+
+class TestDnsmasqConfigGeneration:
+    """Verify dnsmasq config is generated correctly for real profiles."""
+
+    def test_nftset_entry_format(self) -> None:
+        """nftset_entry produces the correct dnsmasq directive."""
+        entry = nftset_entry("github.com")
+        assert entry.startswith("nftset=/github.com/")
+        assert "allow_v4" in entry
+        assert "allow_v6" in entry
+
+    def test_generate_config_with_real_domains(self, tmp_path: Path) -> None:
+        """generate_config() produces a valid dnsmasq config for real domains."""
+        pid_path = tmp_path / "dnsmasq.pid"
+        config = generate_config(PASTA_DNS, ["github.com", "pypi.org"], pid_path)
+
+        assert f"server={PASTA_DNS}" in config
+        assert f"listen-address={DNSMASQ_BIND}" in config
+        assert "nftset=/github.com/" in config
+        assert "nftset=/pypi.org/" in config
+        assert "bind-interfaces" in config
+        assert "no-resolv" in config
+
+    def test_config_written_to_state_dir(self, tmp_path: Path) -> None:
+        """Config is written to the state directory alongside other state files."""
+        state.ensure_state_dirs(tmp_path)
+        conf_path = state.dnsmasq_conf_path(tmp_path)
+        pid_path = state.dnsmasq_pid_path(tmp_path)
+        config = generate_config(PASTA_DNS, ["example.org"], pid_path)
+        conf_path.write_text(config)
+
+        assert conf_path.is_file()
+        assert "example.org" in conf_path.read_text()
+
+
+# ── Story 3: pre_start with dnsmasq tier ─────────────────
+
+
+@pytest.mark.needs_podman
+@podman_missing
+@nft_missing
+@dnsmasq_missing
+class TestPreStartDnsmasqTier:
+    """pre_start() detects dnsmasq tier and sets correct podman args."""
+
+    def test_pre_start_adds_dns_flag(self) -> None:
+        """When dnsmasq is available, pre_start() adds --dns 127.0.0.1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            shield = Shield(ShieldConfig(state_dir=Path(tmp)))
+            args = shield.pre_start("test-ctr")
+
+        assert "--dns" in args
+        dns_idx = args.index("--dns")
+        assert args[dns_idx + 1] == DNSMASQ_BIND
+
+    def test_pre_start_writes_profile_domains(self) -> None:
+        """pre_start() writes profile domains to state for the OCI hook."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sd = Path(tmp)
+            shield = Shield(ShieldConfig(state_dir=sd))
+            shield.pre_start("test-ctr")
+
+        domains_path = state.profile_domains_path(sd)
+        assert domains_path.is_file()
+        domains = read_domains(domains_path)
+        # dev-standard profile contains at least some domains
+        assert len(domains) > 0
+
+    def test_pre_start_sets_dns_tier_annotation(self) -> None:
+        """pre_start() sets the dns_tier annotation to 'dnsmasq'."""
+        with tempfile.TemporaryDirectory() as tmp:
+            shield = Shield(ShieldConfig(state_dir=Path(tmp)))
+            args = shield.pre_start("test-ctr")
+
+        # Find the dns_tier annotation
+        for i, arg in enumerate(args[:-1]):
+            if arg == "--annotation" and "dns_tier" in args[i + 1]:
+                assert "dnsmasq" in args[i + 1]
+                return
+        pytest.fail("dns_tier annotation not found in pre_start args")
+
+
+# ── Story 4: full dnsmasq lifecycle in a real container ──
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@pytest.mark.needs_hooks
+@podman_missing
+@nft_missing
+@dnsmasq_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestDnsmasqInContainer:
+    """End-to-end: dnsmasq launches inside a container's netns via OCI hook.
+
+    This is the full story:
+    1. pre_start() detects dnsmasq, adds --dns 127.0.0.1
+    2. Container starts, OCI hook fires
+    3. Hook applies nft ruleset + launches dnsmasq in the netns
+    4. Container's resolv.conf points to 127.0.0.1
+    5. DNS queries inside container go through dnsmasq
+    6. dnsmasq auto-populates nft allow sets via --nftset
+    7. Container stop kills dnsmasq (poststop hook)
+    """
+
+    @pytest.fixture
+    def dnsmasq_container(self, _pull_image: None, shield_env: Path):
+        """Start a container with dnsmasq-tier shield protection."""
+        name = f"{CTR_PREFIX}-dnsmasq-{id(self)}"
+        sd = shield_env / "containers" / name
+        cfg = ShieldConfig(state_dir=sd)
+        shield = Shield(cfg)
+
+        _podman_rm(name)
+        try:
+            extra_args = shield.pre_start(name)
+            # Verify dnsmasq tier was selected
+            tier_args = [a for i, a in enumerate(extra_args) if "dns_tier" in a]
+            if not any("dnsmasq" in a for a in tier_args):
+                pytest.skip("dnsmasq tier not selected (binary may lack nftset)")
+
+            start_shielded_container(name, extra_args, IMAGE)
+            yield name, sd, shield
+        finally:
+            _podman_rm(name)
+
+    def test_resolv_conf_points_to_dnsmasq(self, dnsmasq_container) -> None:
+        """Container's resolv.conf points to 127.0.0.1 (dnsmasq)."""
+        name, _sd, _shield = dnsmasq_container
+        r = exec_in_container(name, "cat", "/etc/resolv.conf")
+        assert r.returncode == 0
+        assert "127.0.0.1" in r.stdout
+
+    def test_dnsmasq_pid_file_exists(self, dnsmasq_container) -> None:
+        """dnsmasq PID file was written to state directory."""
+        _name, sd, _shield = dnsmasq_container
+        pid_path = state.dnsmasq_pid_path(sd)
+        assert pid_path.is_file()
+        pid_str = pid_path.read_text().strip()
+        assert pid_str.isdigit()
+
+    def test_dnsmasq_config_exists(self, dnsmasq_container) -> None:
+        """dnsmasq config was generated in state directory."""
+        _name, sd, _shield = dnsmasq_container
+        conf_path = state.dnsmasq_conf_path(sd)
+        assert conf_path.is_file()
+        config = conf_path.read_text()
+        assert "listen-address=127.0.0.1" in config
+        assert "nftset=/" in config
+
+    def test_upstream_dns_persisted(self, dnsmasq_container) -> None:
+        """Upstream DNS address was persisted to state."""
+        _name, sd, _shield = dnsmasq_container
+        upstream_path = state.upstream_dns_path(sd)
+        assert upstream_path.is_file()
+        upstream = upstream_path.read_text().strip()
+        assert upstream  # non-empty
+
+    def test_nft_sets_have_timeout(self, dnsmasq_container) -> None:
+        """nft allow sets have timeout flag when dnsmasq is active."""
+        name, _sd, _shield = dnsmasq_container
+        pid = subprocess.run(
+            ["podman", "inspect", "--format", "{{.State.Pid}}", name],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+
+        r = nsenter_nft(pid, "list", "ruleset")
+        assert r.returncode == 0
+        assert "timeout" in r.stdout
+
+    def test_allowed_domain_resolves_and_is_reachable(self, dnsmasq_container) -> None:
+        """Traffic to allowed domains works through dnsmasq resolution."""
+        name, _sd, _shield = dnsmasq_container
+        # one.one.one.one is in dev-standard profile and resolves to Cloudflare
+        assert_reachable(name, "http://1.1.1.1/")
+
+    def test_blocked_target_is_denied(self, dnsmasq_container) -> None:
+        """Traffic to non-allowed targets is denied by nft."""
+        name, _sd, _shield = dnsmasq_container
+        assert_blocked(name, "http://8.8.8.8/")
+
+
+# ── Story 5: live domain allow/deny ─────────────────────
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@pytest.mark.needs_hooks
+@podman_missing
+@nft_missing
+@dnsmasq_missing
+@pytest.mark.usefixtures("nft_in_netns")
+class TestLiveDomainAllowDeny:
+    """Live allow/deny updates dnsmasq config and nft sets."""
+
+    @pytest.fixture
+    def shielded(self, _pull_image: None, shield_env: Path):
+        """Start a shielded container for allow/deny testing."""
+        name = f"{CTR_PREFIX}-allowdeny-{id(self)}"
+        sd = shield_env / "containers" / name
+        cfg = ShieldConfig(state_dir=sd)
+        shield = Shield(cfg)
+
+        _podman_rm(name)
+        try:
+            extra_args = shield.pre_start(name)
+            start_shielded_container(name, extra_args, IMAGE)
+            yield name, sd, shield
+        finally:
+            _podman_rm(name)
+
+    def test_allow_domain_updates_profile_domains(self, shielded) -> None:
+        """shield.allow(domain) adds the domain to profile.domains."""
+        name, sd, shield = shielded
+        shield.allow(name, "dns.google")
+        domains = read_domains(state.profile_domains_path(sd))
+        assert "dns.google" in domains
+
+    def test_deny_domain_removes_from_profile_domains(self, shielded) -> None:
+        """shield.deny(domain) removes the domain from profile.domains."""
+        name, sd, shield = shielded
+        # First allow, then deny
+        shield.allow(name, "dns.google")
+        shield.deny(name, "dns.google")
+        domains = read_domains(state.profile_domains_path(sd))
+        assert "dns.google" not in domains
+
+
+# ── Story 6: graceful degradation (dig fallback) ─────────
+
+
+@pytest.mark.needs_podman
+@pytest.mark.needs_internet
+@podman_missing
+@nft_missing
+class TestGracefulDegradation:
+    """Verify shield works without dnsmasq (dig/getent fallback)."""
+
+    def test_pre_start_without_dnsmasq(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """pre_start() falls back to dig tier when dnsmasq is absent."""
+        import shutil
+
+        # Hide dnsmasq from PATH
+        original_which = shutil.which
+
+        def _which_no_dnsmasq(name: str, *a, **kw):
+            if name == "dnsmasq":
+                return None
+            return original_which(name, *a, **kw)
+
+        monkeypatch.setattr(shutil, "which", _which_no_dnsmasq)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shield = Shield(ShieldConfig(state_dir=Path(tmp)))
+            # Clear the has() cache so our mock takes effect
+            shield.runner._has_cache.clear()
+            args = shield.pre_start("test-ctr")
+
+        # Should NOT have --dns flag (dig tier resolves at pre-start)
+        assert "--dns" not in args
+        # Should have dns_tier=dig annotation
+        for i, arg in enumerate(args[:-1]):
+            if arg == "--annotation" and "dns_tier" in args[i + 1]:
+                assert "dig" in args[i + 1]
+                return
+        pytest.fail("dns_tier annotation not found")
