@@ -391,12 +391,13 @@ class TestCheckEnvironment:
         _find_dirs: mock.Mock,
         make_shield: ShieldHarnessFactory,
     ) -> None:
-        """Missing dig binary is reported in environment check."""
+        """Missing dig (and dnsmasq) reports getent degradation in environment check."""
         harness = make_shield()
         harness.runner.run.return_value = _podman_info_json("5.8.0")
-        harness.runner.has.side_effect = lambda cmd: cmd != "dig"
+        harness.runner.has.side_effect = lambda cmd: cmd not in ("dig", "dnsmasq")
         env = harness.shield.check_environment()
         assert any("dig" in i for i in env.issues)
+        assert env.dns_tier == "getent"
 
     @mock.patch("terok_shield.find_hooks_dirs", return_value=[])
     @mock.patch("terok_shield.has_global_hooks", return_value=False)

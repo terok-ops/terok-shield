@@ -140,7 +140,6 @@ path = "terok_shield"
 depends_on = [
     "terok_shield.audit",
     "terok_shield.config",
-    "terok_shield.dnsmasq",
     "terok_shield.dns",
     "terok_shield.mode_hook",
     "terok_shield.nft",

@@ -27,9 +27,6 @@ if TYPE_CHECKING:
 
 # ── Constants ────────────────────────────────────────────
 
-_NFTSET_FEATURE = "nftset"
-_NFTSET_ABSENT = "no-nftset"
-
 # Strict domain label validation (RFC 1035 + wildcards).
 # Allows: a-z, 0-9, hyphens, dots, leading wildcard (*.).
 _DOMAIN_RE = re.compile(r"^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z]{2,}$")
@@ -99,21 +96,6 @@ def generate_config(
     return "\n".join(lines) + "\n"
 
 
-# ── HAVE_NFTSET detection ────────────────────────────────
-
-
-def has_nftset(runner: CommandRunner) -> bool:
-    """Return True if the installed dnsmasq supports ``--nftset``.
-
-    Checks ``dnsmasq --version`` compile options for ``nftset`` (present)
-    vs ``no-nftset`` (absent).  Returns False if dnsmasq is not installed.
-    """
-    output = runner.dnsmasq_version()
-    if not output:
-        return False
-    return _NFTSET_FEATURE in output and _NFTSET_ABSENT not in output
-
-
 # ── Lifecycle ────────────────────────────────────────────
 
 
@@ -127,6 +109,8 @@ def launch(
     """Generate config and launch dnsmasq in the container's network namespace.
 
     dnsmasq daemonizes and writes its PID to the state directory.
+    If dnsmasq lacks ``--nftset`` support, it will fail immediately with
+    a clear "bad command line options" error (fail-closed).
 
     Args:
         runner: Command runner for subprocess calls.
@@ -164,19 +148,28 @@ def launch(
         )
 
 
+def _read_pid(state_dir: Path) -> int | None:
+    """Read the dnsmasq PID from state, or None if missing/invalid."""
+    pid_path = state.dnsmasq_pid_path(state_dir)
+    try:
+        return int(pid_path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def kill(state_dir: Path) -> None:
     """Kill dnsmasq for a container (best-effort cleanup).
 
     Reads the PID from the state directory and sends SIGTERM.
     Silently ignores missing PID files, stale PIDs, and permission errors.
-    This is defense-in-depth — the network namespace teardown at container
-    exit normally kills dnsmasq first.
+
+    Needed because dnsmasq runs in the host PID namespace (we only
+    ``nsenter -n`` into the network namespace).  When the container stops,
+    podman kills container-PID-namespace processes, but dnsmasq is NOT
+    among them — it becomes an orphan with a broken network socket.
     """
-    pid_path = state.dnsmasq_pid_path(state_dir)
-    try:
-        pid_str = pid_path.read_text().strip()
-        pid_int = int(pid_str)
-    except (OSError, ValueError):
+    pid_int = _read_pid(state_dir)
+    if pid_int is None:
         return
     try:
         os.kill(pid_int, signal.SIGTERM)
@@ -184,30 +177,29 @@ def kill(state_dir: Path) -> None:
         pass
 
 
-def reload(
-    runner: CommandRunner,
-    container_pid: str,
-    state_dir: Path,
-    upstream_dns: str,
-    domains: list[str],
-) -> None:
-    """Regenerate dnsmasq config, kill the old instance, and relaunch.
+def reload(state_dir: Path, upstream_dns: str, domains: list[str]) -> None:
+    """Regenerate dnsmasq config and signal the daemon to reload.
 
-    Used after ``shield allow/deny`` changes the domain list, or by
-    ``shield reload`` for manual recovery.
+    Sends SIGHUP to the running dnsmasq, which re-reads its config file.
+    No-op if dnsmasq is not running (PID file absent).
 
     Args:
-        runner: Command runner for subprocess calls.
-        container_pid: Container PID (for nsenter into its network namespace).
         state_dir: Per-container state directory.
         upstream_dns: Upstream DNS forwarder address.
         domains: Updated domain names for nftset auto-population.
-
-    Raises:
-        RuntimeError: If dnsmasq fails to restart.
     """
-    kill(state_dir)
-    launch(runner, container_pid, state_dir, upstream_dns, domains)
+    pid_int = _read_pid(state_dir)
+    if pid_int is None:
+        return
+
+    # Regenerate config, then signal dnsmasq to re-read it
+    pid_path = state.dnsmasq_pid_path(state_dir)
+    conf_path = state.dnsmasq_conf_path(state_dir)
+    conf_path.write_text(generate_config(upstream_dns, domains, pid_path))
+    try:
+        os.kill(pid_int, signal.SIGHUP)
+    except (ProcessLookupError, PermissionError):
+        pass  # dnsmasq already dead; next container start will relaunch
 
 
 def add_domain(state_dir: Path, domain: str) -> bool:

@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import state
+from . import dnsmasq, state
 from .config import (
     ANNOTATION_AUDIT_ENABLED_KEY,
     ANNOTATION_DNS_TIER_KEY,
@@ -36,7 +36,6 @@ from .config import (
     ShieldConfig,
     ShieldState,
 )
-from .dnsmasq import has_nftset
 from .nft import NFT_TABLE, RulesetBuilder
 from .nft_constants import DNSMASQ_BIND, PASTA_DNS, SLIRP4NETNS_DNS
 from .podman_info import (
@@ -58,6 +57,22 @@ if TYPE_CHECKING:
 
 
 # ── Private helpers ──────────────────────────────────────
+
+
+def _upstream_dns_for_mode(network_mode: str) -> str:
+    """Return the upstream DNS forwarder address for a network mode.
+
+    Raises ValueError for unrecognised modes so new modes (e.g. bridge)
+    get an explicit implementation rather than a silent wrong default.
+    """
+    if network_mode == "slirp4netns":
+        return SLIRP4NETNS_DNS
+    if network_mode == "pasta":
+        return PASTA_DNS
+    raise ValueError(
+        f"Cannot determine upstream DNS for network mode {network_mode!r}. "
+        "Add support for this mode in _upstream_dns_for_mode()."
+    )
 
 
 def _split_domains_ips(entries: list[str]) -> tuple[list[str], list[str]]:
@@ -248,7 +263,7 @@ class HookMode:
         # Detect DNS tier and upstream DNS
         tier = self._detect_dns_tier()
         mode = info.network_mode if os.geteuid() != 0 else "pasta"
-        upstream_dns = SLIRP4NETNS_DNS if mode == "slirp4netns" else PASTA_DNS
+        upstream_dns = _upstream_dns_for_mode(mode)
 
         # Resolve DNS and write profile allowlist
         entries = self._profiles.compose_profiles(profiles)
@@ -337,9 +352,12 @@ class HookMode:
     def _detect_dns_tier(self) -> DnsTier:
         """Detect the best available DNS resolution tier.
 
-        Checks for dnsmasq with HAVE_NFTSET first, then dig, then getent.
+        If dnsmasq is installed, assumes nftset support (all supported
+        distros ship dnsmasq >= 2.87 with nftset).  If dnsmasq lacks
+        nftset, the launch will fail with a clear "bad option" error
+        (fail-closed).
         """
-        if self._runner.has("dnsmasq") and has_nftset(self._runner):
+        if self._runner.has("dnsmasq"):
             return DnsTier.DNSMASQ
         if self._runner.has("dig"):
             return DnsTier.DIG
@@ -435,53 +453,50 @@ class HookMode:
                         f.write(f"{ip}\n")
 
     def allow_domain(self, container: str, domain: str) -> None:
-        """Add a domain to the dnsmasq config and reload.
+        """Add a domain to the dnsmasq config and signal reload.
 
-        When dnsmasq is not active (dig/getent tier), this is a no-op —
-        domain-level tracking only matters when dnsmasq handles resolution.
+        Always persists the domain to ``profile.domains`` for future
+        container starts.  When dnsmasq is running, sends SIGHUP so the
+        domain takes effect immediately.  When dnsmasq is not running
+        (dig/getent tier), the domain is still persisted but only takes
+        effect on the next container start with dnsmasq tier.
+
+        The IP-level allow (nft set update) is handled separately by
+        ``allow_ip()`` — this method is the domain-tracking counterpart
+        that ensures future IP rotations are also captured.
         """
-        from . import dnsmasq
-
         sd = self._config.state_dir.resolve()
         if not dnsmasq.add_domain(sd, domain):
             return  # already present
-        self._reload_dnsmasq(container, sd)
+        self._reload_dnsmasq(sd)
 
     def deny_domain(self, container: str, domain: str) -> None:
-        """Remove a domain from the dnsmasq config and reload.
+        """Remove a domain from the dnsmasq config and signal reload.
 
-        When dnsmasq is not active, this is a no-op.
+        Counterpart of ``allow_domain()``.  Removes the domain so dnsmasq
+        stops auto-populating nft sets for it on future DNS queries.
         """
-        from . import dnsmasq
-
         sd = self._config.state_dir.resolve()
         if not dnsmasq.remove_domain(sd, domain):
             return  # not present
-        self._reload_dnsmasq(container, sd)
+        self._reload_dnsmasq(sd)
 
-    def _reload_dnsmasq(self, container: str, state_dir: Path) -> None:
-        """Reload dnsmasq with the current domain list (best-effort).
+    def _reload_dnsmasq(self, state_dir: Path) -> None:
+        """Regenerate dnsmasq config and send SIGHUP (best-effort).
 
         No-op if dnsmasq is not running (PID file absent).
         """
-        from . import dnsmasq
-
-        pid_path = state.dnsmasq_pid_path(state_dir)
-        if not pid_path.is_file():
-            return  # dnsmasq not running (dig/getent tier)
-
-        # Read upstream DNS from the dnsmasq config (first server= line)
+        # Read upstream DNS from the existing dnsmasq config
         conf_path = state.dnsmasq_conf_path(state_dir)
-        upstream = PASTA_DNS  # fallback
+        upstream = PASTA_DNS
         if conf_path.is_file():
             for line in conf_path.read_text().splitlines():
                 if line.startswith("server="):
                     upstream = line.split("=", 1)[1]
                     break
 
-        container_pid = self._runner.podman_inspect(container, "{{.State.Pid}}")
         domains = dnsmasq._read_domains(state.profile_domains_path(state_dir))
-        dnsmasq.reload(self._runner, container_pid, state_dir, upstream, domains)
+        dnsmasq.reload(state_dir, upstream, domains)
 
     def list_rules(self, container: str) -> str:
         """List current nft rules for a running container."""

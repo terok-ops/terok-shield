@@ -72,11 +72,11 @@ class EnvironmentCheck:
         setup_hint: Setup instructions (empty if not needed).
     """
 
+    dns_tier: str
     ok: bool = True
     podman_version: tuple[int, ...] = (0,)
     hooks: str = "per-container"
     health: str = "ok"
-    dns_tier: str = "dig"
     issues: list[str] = field(default_factory=list)
     needs_setup: bool = False
     setup_hint: str = ""
@@ -150,8 +150,6 @@ class Shield:
         :class:`EnvironmentCheck` with detected issues and setup hints.
         Does not raise — the caller decides how to handle issues.
         """
-        from .dnsmasq import has_nftset
-
         output = self.runner.run(["podman", "info", "-f", "json"], check=False)
         info = parse_podman_info(output)
         issues: list[str] = []
@@ -160,8 +158,8 @@ class Shield:
         hooks = "per-container"
         health = "ok"
 
-        # Detect DNS tier
-        if self.runner.has("dnsmasq") and has_nftset(self.runner):
+        # Detect DNS tier (same logic as mode_hook._detect_dns_tier)
+        if self.runner.has("dnsmasq"):
             dns_tier = DnsTier.DNSMASQ.value
         elif self.runner.has("dig"):
             dns_tier = DnsTier.DIG.value

@@ -13,7 +13,6 @@ from terok_shield.dnsmasq import (
     _validate_domain,
     add_domain,
     generate_config,
-    has_nftset,
     kill,
     launch,
     nftset_entry,
@@ -119,37 +118,6 @@ def test_generate_config_empty_domains(tmp_path: Path) -> None:
 
     assert "nftset" not in config
     assert f"server={PASTA_DNS}" in config
-
-
-# ── has_nftset ───────────────────────────────────────────
-
-
-def test_has_nftset_true() -> None:
-    """has_nftset() returns True when HAVE_NFTSET is in dnsmasq version output."""
-    runner = mock.MagicMock()
-    runner.dnsmasq_version.return_value = (
-        "Dnsmasq version 2.90  Copyright (c) 2000-2024 Simon Kelley\n"
-        "Compile time options: IPv6 GNU-getopt no-DBus no-UBus "
-        "no-i18n no-IDN DHCP DHCPv6 no-Lua TFTP no-conntrack "
-        "ipset nftset auth cryptohash DNSSEC loop-detect inotify dumpfile\n"
-    )
-    assert has_nftset(runner) is True
-
-
-def test_has_nftset_false_no_support() -> None:
-    """has_nftset() returns False when dnsmasq lacks nftset support."""
-    runner = mock.MagicMock()
-    runner.dnsmasq_version.return_value = (
-        "Dnsmasq version 2.85\nCompile time options: IPv6 no-nftset\n"
-    )
-    assert has_nftset(runner) is False
-
-
-def test_has_nftset_false_not_installed() -> None:
-    """has_nftset() returns False when dnsmasq is not installed."""
-    runner = mock.MagicMock()
-    runner.dnsmasq_version.return_value = ""
-    assert has_nftset(runner) is False
 
 
 # ── launch ───────────────────────────────────────────────
@@ -265,22 +233,28 @@ def test_remove_domain_not_found(tmp_path: Path) -> None:
 # ── reload ───────────────────────────────────────────────
 
 
-def test_reload_kills_and_relaunches(tmp_path: Path) -> None:
-    """reload() kills old dnsmasq and launches a new one."""
+def test_reload_regenerates_config_and_sends_sighup(tmp_path: Path) -> None:
+    """reload() regenerates config and sends SIGHUP to dnsmasq."""
     state.ensure_state_dirs(tmp_path)
-    runner = mock.MagicMock()
-    runner.run.return_value = ""
-
-    # Simulate existing dnsmasq
     state.dnsmasq_pid_path(tmp_path).write_text("12345\n")
 
-    with mock.patch("terok_shield.dnsmasq.os.kill"):
-        reload(runner, "42", tmp_path, PASTA_DNS, [TEST_DOMAIN])
+    with mock.patch("terok_shield.dnsmasq.os.kill") as mock_kill:
+        reload(tmp_path, PASTA_DNS, [TEST_DOMAIN])
 
     # Config was regenerated
     assert TEST_DOMAIN in state.dnsmasq_conf_path(tmp_path).read_text()
-    # nsenter was called for relaunch
-    runner.run.assert_called_once()
+    # SIGHUP sent (not SIGTERM)
+    import signal
+
+    mock_kill.assert_called_once_with(12345, signal.SIGHUP)
+
+
+def test_reload_noop_when_not_running(tmp_path: Path) -> None:
+    """reload() is a no-op when dnsmasq PID file is absent."""
+    state.ensure_state_dirs(tmp_path)
+    with mock.patch("terok_shield.dnsmasq.os.kill") as mock_kill:
+        reload(tmp_path, PASTA_DNS, [TEST_DOMAIN])
+    mock_kill.assert_not_called()
 
 
 # ── write_resolv_conf ────────────────────────────────────

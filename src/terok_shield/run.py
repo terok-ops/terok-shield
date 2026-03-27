@@ -117,10 +117,6 @@ class CommandRunner(Protocol):
         """Resolve domain via ``getent hosts`` (fallback when dig is missing)."""
         ...
 
-    def dnsmasq_version(self) -> str:
-        """Return ``dnsmasq --version`` output, or empty string if not installed."""
-        ...
-
 
 # ── SubprocessRunner ─────────────────────────────────────
 
@@ -258,9 +254,3 @@ class SubprocessRunner:
             except ValueError:
                 continue
         return result
-
-    def dnsmasq_version(self) -> str:
-        """Return ``dnsmasq --version`` output, or empty string if not installed."""
-        if not self.has("dnsmasq"):
-            return ""
-        return self.run(["dnsmasq", "--version"], check=False)

@@ -59,6 +59,10 @@ class DnsResolver:
     def resolve_domains(self, domains: list[str]) -> list[str]:
         """Resolve a list of domains to IPv4 and IPv6 addresses.
 
+        Used by the dig and getent tiers for static pre-start resolution.
+        When dnsmasq tier is active, this method is only called for raw
+        IPs — dnsmasq handles domain resolution at runtime via --nftset.
+
         Queries both A and AAAA records for each domain via ``dig``.
         Falls back to ``getent hosts`` when ``dig`` is not installed
         (fewer IPs captured, no AAAA parallel query).
