@@ -790,6 +790,116 @@ class TestDomainOperations:
             harness.mode._reload_dnsmasq(sd)
 
 
+class TestPreStartDnsTierBranches:
+    """pre_start() DNS tier branching — dnsmasq vs dig/getent code paths."""
+
+    @mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+    def test_pre_start_dig_tier_resolves_all_entries(
+        self,
+        _has_hooks: mock.Mock,
+        monkeypatch: pytest.MonkeyPatch,
+        make_hook_mode: HookModeHarnessFactory,
+    ) -> None:
+        """When tier is DIG, pre_start resolves all entries (domains + IPs) to cache."""
+        _set_euid(monkeypatch, 0)
+        harness = make_hook_mode()
+        harness.runner.run.return_value = _MODERN_PODMAN_INFO
+        # Mock has() to return False for dnsmasq, True for dig
+        harness.runner.has.side_effect = lambda name: name != "dnsmasq"
+        harness.profiles.compose_profiles.return_value = [TEST_DOMAIN, TEST_IP1]
+
+        args = harness.mode.pre_start("test", ["dev-standard"])
+
+        # dig tier: resolve_and_cache called with ALL entries (domains + IPs)
+        harness.dns.resolve_and_cache.assert_called_once()
+        call_entries = harness.dns.resolve_and_cache.call_args[0][0]
+        assert TEST_DOMAIN in call_entries
+        assert TEST_IP1 in call_entries
+        # No --dns flag for dig tier
+        assert "--dns" not in args
+
+    @mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+    def test_pre_start_dnsmasq_tier_splits_domains_and_ips(
+        self,
+        _has_hooks: mock.Mock,
+        monkeypatch: pytest.MonkeyPatch,
+        make_hook_mode: HookModeHarnessFactory,
+    ) -> None:
+        """When tier is DNSMASQ, pre_start splits entries: domains to file, IPs to cache."""
+        _set_euid(monkeypatch, 0)
+        harness = make_hook_mode()
+        harness.runner.run.return_value = _MODERN_PODMAN_INFO
+        harness.runner.has.return_value = True  # dnsmasq available
+        harness.profiles.compose_profiles.return_value = [TEST_DOMAIN, TEST_IP1]
+
+        args = harness.mode.pre_start("test", ["dev-standard"])
+
+        # dnsmasq tier: resolve_and_cache called with raw IPs only
+        harness.dns.resolve_and_cache.assert_called_once()
+        call_entries = harness.dns.resolve_and_cache.call_args[0][0]
+        assert TEST_IP1 in call_entries
+        assert TEST_DOMAIN not in call_entries
+        # Domains written to profile.domains
+        sd = harness.config.state_dir.resolve()
+        domains_content = state.profile_domains_path(sd).read_text()
+        assert TEST_DOMAIN in domains_content
+        # --dns flag present
+        assert "--dns" in args
+
+    @mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+    def test_pre_start_getent_tier_resolves_all_entries(
+        self,
+        _has_hooks: mock.Mock,
+        monkeypatch: pytest.MonkeyPatch,
+        make_hook_mode: HookModeHarnessFactory,
+    ) -> None:
+        """When tier is GETENT (no dnsmasq, no dig), pre_start still resolves all entries."""
+        _set_euid(monkeypatch, 0)
+        harness = make_hook_mode()
+        harness.runner.run.return_value = _MODERN_PODMAN_INFO
+        harness.runner.has.return_value = False  # nothing available
+        harness.profiles.compose_profiles.return_value = [TEST_DOMAIN]
+
+        args = harness.mode.pre_start("test", ["dev-standard"])
+
+        harness.dns.resolve_and_cache.assert_called_once()
+        assert "--dns" not in args
+
+
+class TestDenyDomainWithReload:
+    """deny_domain() removes domain and triggers dnsmasq reload."""
+
+    def test_deny_domain_triggers_reload(self, make_hook_mode: HookModeHarnessFactory) -> None:
+        """deny_domain() removes domain from live.domains and reloads dnsmasq."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.live_domains_path(sd).write_text(f"{TEST_DOMAIN}\n")
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        state.dnsmasq_pid_path(sd).write_text("12345\n")
+
+        with (
+            mock.patch("terok_shield.dnsmasq._is_dnsmasq_pid", return_value=True),
+            mock.patch("terok_shield.dnsmasq.os.kill"),
+        ):
+            harness.mode.deny_domain(TEST_DOMAIN)
+
+        denied = state.denied_domains_path(sd).read_text()
+        assert TEST_DOMAIN in denied
+
+    def test_deny_domain_noop_when_not_present(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """deny_domain() is a no-op when the domain is not in any domain file."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+
+        with mock.patch("terok_shield.dnsmasq.reload") as mock_reload:
+            harness.mode.deny_domain(TEST_DOMAIN)
+        mock_reload.assert_not_called()
+
+
 class TestContainerRulesetDnsTier:
     """_container_ruleset() uses persisted DNS tier for set_timeout."""
 

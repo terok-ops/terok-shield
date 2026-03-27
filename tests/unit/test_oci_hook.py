@@ -468,6 +468,26 @@ def test_hook_main_dnsmasq_cleanup_on_post_launch_failure(
     mock_dnsmasq.kill.assert_called_once()
 
 
+def test_hook_main_falls_back_to_resolv_conf_without_upstream_annotation(
+    hook_main_harness: HookMainHarness,
+    tmp_path: Path,
+) -> None:
+    """hook_main() reads DNS from resolv.conf when upstream_dns annotation is absent."""
+    annotations = _valid_annotations(tmp_path)
+    del annotations[ANNOTATION_UPSTREAM_DNS_KEY]
+    assert hook_main(_oci_state(annotations=annotations)) == 0
+    # RulesetBuilder should get DNS from the mocked _read_container_dns (169.254.1.1)
+    _, kwargs = hook_main_harness.ruleset_builder_cls.call_args
+    assert kwargs["dns"] == "169.254.1.1"
+
+
+def test_hook_main_missing_version_annotation_returns_1(tmp_path: Path) -> None:
+    """hook_main() fails closed when version annotation is missing."""
+    annotations = _valid_annotations(tmp_path)
+    del annotations[ANNOTATION_VERSION_KEY]
+    assert hook_main(_oci_state(annotations=annotations)) == 1
+
+
 def test_hook_main_poststop_calls_dnsmasq_kill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
