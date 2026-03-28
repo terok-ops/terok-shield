@@ -18,7 +18,7 @@ import os
 import shutil
 import socket
 import struct
-import subprocess
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -45,7 +45,7 @@ def _find_dnsmasq() -> str:
 
 def _nsenter(pid: str, *cmd: str, stdin: str | None = None) -> None:
     """Run *cmd* inside the container's network namespace via nsenter."""
-    subprocess.run(
+    subprocess.run(  # nosec B603
         [_find_nsenter(), "-t", pid, "-n", "--", *cmd],
         input=stdin,
         text=stdin is not None,
