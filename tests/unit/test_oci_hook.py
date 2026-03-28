@@ -483,3 +483,69 @@ def test_hook_main_poststop_calls_dnsmasq_kill(
     rc = hook_main(_oci_state(pid=0, annotations=annotations), stage="poststop")
     assert rc == 0
     mock_dnsmasq.kill.assert_called_once()
+
+
+def test_hook_main_reads_stdin_when_no_stdin_data(
+    hook_main_harness: HookMainHarness,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """hook_main() reads from sys.stdin when stdin_data is None."""
+    import io
+    import sys
+
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(_oci_state(annotations=_valid_annotations(tmp_path)))
+    )
+    assert hook_main(stdin_data=None) == 0
+
+
+def test_hook_main_invalid_dns_tier_returns_1(
+    hook_main_harness: HookMainHarness,
+    tmp_path: Path,
+) -> None:
+    """hook_main() returns 1 (fail-closed) when dns_tier annotation is unrecognized."""
+    annotations = _valid_annotations(tmp_path)
+    annotations[ANNOTATION_DNS_TIER_KEY] = "unknown-tier"
+    assert hook_main(_oci_state(annotations=annotations)) == 1
+
+
+def test_load_and_add_ips_logs_broad_cidr(tmp_path: Path) -> None:
+    """_load_and_add_ips() emits a 'broad range' audit event for broad CIDRs."""
+    from terok_shield.oci_hook import HookExecutor
+
+    sd = tmp_path / "sd"
+    sd.mkdir()
+    # Write a broad RFC1918 CIDR to the profile allowlist
+    (sd / "profile.allowed").write_text(f"{RFC1918_CIDR_10}\n")
+
+    audit = mock.MagicMock()
+    runner = mock.MagicMock()
+    ruleset = mock.MagicMock()
+    ruleset.add_elements_dual.return_value = ""
+
+    executor = HookExecutor(runner=runner, audit=audit, ruleset=ruleset, state_dir=sd)
+    executor._load_and_add_ips("test-ctr", "42")
+
+    detail_args = [call.kwargs.get("detail", "") for call in audit.log_event.call_args_list]
+    assert any("broad range" in d for d in detail_args), (
+        f"Expected 'broad range' audit event; got: {detail_args}"
+    )
+
+
+def test_hook_main_reads_stdin_when_no_stdin_data_second(
+    hook_main_harness: HookMainHarness,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """hook_main(stdin_data=None) defaults to 'createRuntime' stage from argv."""
+    import io
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["oci_hook"])
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(_oci_state(annotations=_valid_annotations(tmp_path))),
+    )
+    assert hook_main(stdin_data=None) == 0

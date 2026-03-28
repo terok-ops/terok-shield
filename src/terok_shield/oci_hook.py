@@ -468,6 +468,6 @@ def _handle_poststop(annotations: dict[str, str]) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     _stage = sys.argv[1] if len(sys.argv) > 1 else "createRuntime"
     sys.exit(hook_main(stage=_stage))

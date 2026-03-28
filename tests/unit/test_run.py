@@ -396,6 +396,7 @@ def test_subprocess_runner_stores_nft_path() -> None:
         ),
         pytest.param("", [], id="empty-output"),
         pytest.param("not-an-ip    host\n", [], id="invalid-ip-skipped"),
+        pytest.param(f"\n{TEST_IP1}       {TEST_DOMAIN}\n\n", [TEST_IP1], id="blank-lines-skipped"),
     ],
 )
 def test_getent_hosts(

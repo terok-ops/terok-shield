@@ -468,6 +468,15 @@ def test_read_domains_deduplicates(tmp_path: Path) -> None:
     assert read_domains(domains_path) == ["github.com"]
 
 
+def test_read_domains_skips_blank_lines(tmp_path: Path) -> None:
+    """read_domains() skips blank lines without treating them as invalid."""
+    from terok_shield.dnsmasq import read_domains
+
+    domains_path = tmp_path / "profile.domains"
+    domains_path.write_text("\ngithub.com\n\nexample.org\n\n")
+    assert read_domains(domains_path) == ["github.com", "example.org"]
+
+
 # ── generate_config validation ───────────────────────────
 
 

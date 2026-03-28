@@ -994,3 +994,105 @@ class TestContainerRulesetDnsTier:
 
         ruleset = harness.mode._container_ruleset("test-ctr")
         assert ruleset._set_timeout == ""
+
+
+# ── Additional coverage tests ─────────────────────────────
+
+
+def test_upstream_dns_for_mode_raises_on_unknown_mode() -> None:
+    """_upstream_dns_for_mode() raises ValueError for unrecognised network modes."""
+    from terok_shield.mode_hook import _upstream_dns_for_mode
+
+    with pytest.raises(ValueError, match="Cannot determine upstream DNS"):
+        _upstream_dns_for_mode("bridge")
+
+
+@mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+def test_pre_start_includes_hooks_dir_when_persists(
+    _has_hooks: mock.Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() adds --hooks-dir when info.hooks_dir_persists is True."""
+    _set_euid(monkeypatch, 1000)
+    harness = make_hook_mode(config=make_config())
+    # Podman version 99.0.0 triggers hooks_dir_persists = True
+    harness.runner.run.return_value = json.dumps(
+        {"host": {"rootlessNetworkCmd": "pasta"}, "version": {"Version": "99.0.0"}}
+    )
+    harness.profiles.compose_profiles.return_value = []
+
+    args = harness.mode.pre_start("test", ["dev-standard"])
+
+    assert "--hooks-dir" in args
+
+
+def test_shield_state_returns_down_all(make_hook_mode: HookModeHarnessFactory) -> None:
+    """shield_state() returns DOWN_ALL when allow-all bypass is active but not simple bypass."""
+    harness = make_hook_mode()
+    harness.runner.nft_via_nsenter.return_value = "some rules"
+    # First call (allow_all=False): non-empty errors → not DOWN, continue
+    # Second call (allow_all=True): empty list → DOWN_ALL
+    harness.ruleset.verify_bypass.side_effect = [["not bypass"], []]
+
+    assert harness.mode.shield_state("test-ctr") == ShieldState.DOWN_ALL
+
+
+def test_shield_up_repopulates_gateway_v4_from_file(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """shield_up() re-adds the persisted IPv4 gateway to the nft gateway_v4 set."""
+    harness = make_hook_mode(config=make_config())
+    sd = harness.config.state_dir
+    state.gateway_path(sd).write_text("10.0.2.2\n")
+
+    harness.mode._container_ruleset = lambda _c: harness.ruleset
+    harness.runner.nft_via_nsenter.side_effect = [
+        "table inet terok_shield {}",  # shield_state() → UP
+        "",  # apply ruleset
+        "",  # add gateway element
+        "valid output",  # verify
+    ]
+    harness.ruleset.build_hook.return_value = "hook ruleset"
+    harness.ruleset.verify_hook.return_value = []
+    harness.ruleset.add_elements_dual.return_value = ""
+    harness.ruleset.verify_bypass.return_value = ["not bypass"]
+
+    harness.mode.shield_up("test-ctr")
+
+    gateway_calls = [
+        call for call in harness.runner.nft_via_nsenter.call_args_list if "gateway_v4" in call.args
+    ]
+    assert gateway_calls, "Expected nft call to add gateway_v4 element"
+    assert any("{ 10.0.2.2 }" in str(c) for c in gateway_calls)
+
+
+def test_shield_up_repopulates_gateway_v6_from_file(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """shield_up() re-adds the persisted IPv6 gateway to the nft gateway_v6 set."""
+    harness = make_hook_mode(config=make_config())
+    sd = harness.config.state_dir
+    state.gateway_path(sd).write_text("fd00::1\n")
+
+    harness.mode._container_ruleset = lambda _c: harness.ruleset
+    harness.runner.nft_via_nsenter.side_effect = [
+        "table inet terok_shield {}",  # shield_state() → UP
+        "",  # apply ruleset
+        "",  # add gateway element
+        "valid output",  # verify
+    ]
+    harness.ruleset.build_hook.return_value = "hook ruleset"
+    harness.ruleset.verify_hook.return_value = []
+    harness.ruleset.add_elements_dual.return_value = ""
+    harness.ruleset.verify_bypass.return_value = ["not bypass"]
+
+    harness.mode.shield_up("test-ctr")
+
+    gateway_calls = [
+        call for call in harness.runner.nft_via_nsenter.call_args_list if "gateway_v6" in call.args
+    ]
+    assert gateway_calls, "Expected nft call to add gateway_v6 element"
