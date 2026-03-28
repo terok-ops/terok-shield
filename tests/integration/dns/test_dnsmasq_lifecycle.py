@@ -430,9 +430,7 @@ class TestRestartWithReusedStateDir:
     ``dnsmasq.launch()`` to guard against reused state directories.
     """
 
-    def test_dnsmasq_restarts_cleanly_on_reuse(
-        self, _pull_image: None, shield_env: Path
-    ) -> None:
+    def test_dnsmasq_restarts_cleanly_on_reuse(self, _pull_image: None, shield_env: Path) -> None:
         """dnsmasq gets a fresh PID when the container is re-created with the same state dir."""
         name = f"{CTR_PREFIX}-restart-{id(self)}"
         sd = shield_env / "containers" / name
@@ -452,9 +450,7 @@ class TestRestartWithReusedStateDir:
             assert first_pid.isdigit()
 
             # Stop and remove — poststop hook kills dnsmasq, PID file remains on disk
-            subprocess.run(
-                ["podman", "stop", "--time=5", name], capture_output=True, timeout=30
-            )
+            subprocess.run(["podman", "stop", "--time=5", name], capture_output=True, timeout=30)
             subprocess.run(["podman", "rm", name], capture_output=True, timeout=15)
 
             assert not Path(f"/proc/{first_pid}").exists(), (
