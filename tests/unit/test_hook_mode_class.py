@@ -865,17 +865,23 @@ class TestDomainOperations:
             pytest.param("deny_domain", "getent", id="deny-getent"),
         ],
     )
-    def test_domain_method_raises_for_non_dnsmasq_tier(
+    def test_domain_method_is_noop_for_non_dnsmasq_tier(
         self, method_name: str, tier: str, make_hook_mode: HookModeHarnessFactory
     ) -> None:
-        """allow_domain() and deny_domain() raise RuntimeError when the active tier is not dnsmasq."""
+        """allow_domain() and deny_domain() are silent no-ops when the active tier is not dnsmasq.
+
+        The static IP-level allow/deny already ran via allow_ip()/deny_ip(); the
+        domain-tracking step is dnsmasq-specific and simply skipped on dig/getent tiers.
+        """
         harness = make_hook_mode()
         sd = harness.config.state_dir.resolve()
         state.ensure_state_dirs(sd)
         state.dns_tier_path(sd).write_text(f"{tier}\n")
 
-        with pytest.raises(RuntimeError, match="dnsmasq DNS tier"):
-            getattr(harness.mode, method_name)(TEST_DOMAIN)
+        # Must not raise
+        getattr(harness.mode, method_name)(TEST_DOMAIN)
+        # And must not have written any domain state files
+        assert not state.live_domains_path(sd).exists()
 
     def test_allow_domain_passes_when_tier_absent(
         self, make_hook_mode: HookModeHarnessFactory
