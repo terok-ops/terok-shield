@@ -178,15 +178,16 @@ def _read_gateway_v6(pid: str) -> str:
 def _createruntime(pid: str, sd: Path) -> None:
     """Apply the pre-generated ruleset and optionally start dnsmasq."""
     # Verify the target PID's network namespace file exists before invoking nsenter.
-    # PermissionError is possible when running as non-root (e.g. unit tests on CI) —
-    # in that case we cannot stat the file but it may still exist.  Let nsenter be the
-    # gatekeeper: it will fail with a clear error if the PID is gone.
+    # Use stat() rather than exists(): Path.exists() silently swallows PermissionError
+    # in Python 3.14+, whereas stat() reliably raises it.  PermissionError means the
+    # file is present but we can't read it (non-root caller) — that's fine, proceed.
+    # Any other OSError (FileNotFoundError, etc.) means the PID is gone.
     ns_net = Path(f"/proc/{pid}/ns/net")
     try:
-        ns_exists = ns_net.exists()
+        ns_net.stat()
     except PermissionError:
-        ns_exists = True
-    if not ns_exists:
+        pass  # Namespace file exists but cannot be stat'd from this context — proceed.
+    except OSError:
         raise RuntimeError(f"network namespace file missing for pid {pid}: {ns_net}")
 
     ruleset = sd / "ruleset.nft"

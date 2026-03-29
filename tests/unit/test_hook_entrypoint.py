@@ -386,22 +386,22 @@ def test_createruntime_treats_permission_error_as_ns_exists(tmp_path: Path) -> N
     sd.mkdir()
     (sd / "ruleset.nft").write_text("table inet terok_shield {}")
 
-    real_exists = Path.exists
+    real_stat = Path.stat
 
-    def _selective_permission_error(self: Path) -> bool:
+    def _selective_permission_error(self: Path, *args, **kwargs):
         if "ns/net" in str(self):
             raise PermissionError("no access")
-        return real_exists(self)
+        return real_stat(self, *args, **kwargs)
 
     with (
         mock.patch(
-            "terok_shield.resources.hook_entrypoint.Path.exists",
+            "terok_shield.resources.hook_entrypoint.Path.stat",
             _selective_permission_error,
         ),
         mock.patch("terok_shield.resources.hook_entrypoint._nsenter"),
         mock.patch("terok_shield.resources.hook_entrypoint._read_gateway", return_value=""),
     ):
-        # Must not raise — PermissionError is treated as "probably exists"
+        # Must not raise — PermissionError is treated as "namespace exists but inaccessible"
         hook_entrypoint._createruntime("1", sd)
 
 
@@ -409,8 +409,8 @@ def test_createruntime_raises_when_ruleset_missing(tmp_path: Path) -> None:
     """_createruntime() raises RuntimeError when ruleset.nft is absent."""
     sd = tmp_path / "sd"
     sd.mkdir()
-    # PID 1 (init) always has /proc/1/ns/{user,net} on Linux.
-    # sd/ruleset.nft is not created, so the ruleset check fires next.
+    # PID 1: stat() raises PermissionError (non-root) → treated as accessible;
+    # ruleset.nft is absent, so the ruleset-missing check fires next.
     with pytest.raises(RuntimeError, match="ruleset.nft not found"):
         hook_entrypoint._createruntime("1", sd)
 
