@@ -219,10 +219,14 @@ class RulesetBuilder:
         """Validate an IP address or CIDR -- delegates to module-level ``safe_ip``."""
         return safe_ip(value)
 
-    @staticmethod
-    def add_elements_dual(ips: list[str]) -> str:
-        """Classify IPs by family and generate add-element commands for both sets."""
-        return add_elements_dual(ips)
+    def add_elements_dual(self, ips: list[str]) -> str:
+        """Classify IPs by family and generate add-element commands for both sets.
+
+        When the builder has a ``set_timeout`` configured (dnsmasq tier),
+        permanent IPs are written with ``timeout 0`` so they do not auto-expire
+        along with dnsmasq-learned entries.
+        """
+        return add_elements_dual(ips, permanent=bool(self._set_timeout))
 
 
 # ── Module-level free functions (unchanged API) ──────────
@@ -397,11 +401,18 @@ def _safe_ident(value: str) -> str:
     return value
 
 
-def add_elements(set_name: str, ips: list[str], table: str = NFT_TABLE) -> str:
+def add_elements(
+    set_name: str, ips: list[str], table: str = NFT_TABLE, *, timeout_zero: bool = False
+) -> str:
     """Generate nft command to add validated IPs to a set.
 
     Both ``set_name`` and ``table`` are validated against injection.
     Returns empty string if no valid IPs.
+
+    Args:
+        timeout_zero: When ``True``, each element is annotated with
+            ``timeout 0`` so it never expires, even in sets that carry a
+            default element timeout (dnsmasq tier).
     """
     _safe_ident(set_name)
     for part in table.split():
@@ -409,14 +420,25 @@ def add_elements(set_name: str, ips: list[str], table: str = NFT_TABLE) -> str:
     valid = [safe_ip(ip) for ip in ips if _try_validate(ip)]
     if not valid:
         return ""
-    return f"add element {table} {set_name} {{ {', '.join(valid)} }}\n"
+    if timeout_zero:
+        elements = ", ".join(f"{ip} timeout 0" for ip in valid)
+    else:
+        elements = ", ".join(valid)
+    return f"add element {table} {set_name} {{ {elements} }}\n"
 
 
-def add_elements_dual(ips: list[str]) -> str:
+def add_elements_dual(ips: list[str], *, permanent: bool = False) -> str:
     """Classify IPs by family and generate add-element commands for both sets.
 
     IPv4 addresses go to ``allow_v4``, IPv6 to ``allow_v6``.
     Returns empty string if no valid IPs.
+
+    Args:
+        permanent: When ``True``, elements are annotated with ``timeout 0``
+            so they never expire in sets that carry a default timeout
+            (dnsmasq tier).  Permanent IPs (profile/live allowlists) must
+            not be evicted by the same 30-minute expiry used for
+            dnsmasq-learned IPs.
     """
     v4: list[str] = []
     v6: list[str] = []
@@ -427,10 +449,10 @@ def add_elements_dual(ips: list[str]) -> str:
             continue
         (v4 if _is_v4(sanitized) else v6).append(sanitized)
     parts: list[str] = []
-    cmd = add_elements(_ALLOW_V4, v4)
+    cmd = add_elements(_ALLOW_V4, v4, timeout_zero=permanent)
     if cmd:
         parts.append(cmd)
-    cmd = add_elements(_ALLOW_V6, v6)
+    cmd = add_elements(_ALLOW_V6, v6, timeout_zero=permanent)
     if cmd:
         parts.append(cmd)
     return "".join(parts)

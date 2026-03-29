@@ -830,6 +830,50 @@ class TestDomainOperations:
         with pytest.raises(RuntimeError, match="upstream DNS not persisted"):
             harness.mode._reload_dnsmasq(sd)
 
+    def test_allow_domain_raises_for_non_dnsmasq_tier(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """allow_domain() raises RuntimeError when the active tier is not dnsmasq."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.dns_tier_path(sd).write_text("dig\n")
+
+        with pytest.raises(RuntimeError, match="dnsmasq DNS tier"):
+            harness.mode.allow_domain(TEST_DOMAIN)
+
+    def test_deny_domain_raises_for_non_dnsmasq_tier(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """deny_domain() raises RuntimeError when the active tier is not dnsmasq."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.dns_tier_path(sd).write_text("getent\n")
+
+        with pytest.raises(RuntimeError, match="dnsmasq DNS tier"):
+            harness.mode.deny_domain(TEST_DOMAIN)
+
+    def test_allow_domain_passes_when_tier_absent(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """allow_domain() proceeds normally when dns_tier file does not exist (pre_start not run)."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        state.dnsmasq_pid_path(sd).write_text("12345\n")
+        # dns_tier_path NOT written — pre_start has not run
+
+        with (
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
+            mock.patch("terok_shield.dnsmasq.os.kill"),
+        ):
+            harness.mode.allow_domain(TEST_DOMAIN)
+
+        domains = state.live_domains_path(sd).read_text()
+        assert TEST_DOMAIN in domains
+
 
 class TestPreStartDnsTierBranches:
     """pre_start() DNS tier branching — dnsmasq vs dig/getent code paths."""

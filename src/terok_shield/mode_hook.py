@@ -90,6 +90,27 @@ def _split_domains_ips(entries: list[str]) -> tuple[list[str], list[str]]:
     return domains, raw_ips
 
 
+def _require_dnsmasq_tier(state_dir: Path) -> None:
+    """Raise RuntimeError when the container's DNS tier is not dnsmasq.
+
+    Domain-based allowlisting (allow_domain / deny_domain) is only supported
+    on the dnsmasq tier — dnsmasq uses ``--nftset`` to auto-populate the
+    nft allow sets on every DNS query.  On dig/getent tiers the feature is
+    unavailable; calling it would be a silent no-op, so we raise instead.
+
+    No-op when ``dns_tier_path`` is absent (pre_start has not run yet).
+    """
+    tier_path = state.dns_tier_path(state_dir)
+    if not tier_path.is_file():
+        return
+    tier_str = tier_path.read_text().strip()
+    if tier_str != DnsTier.DNSMASQ.value:
+        raise RuntimeError(
+            f"Domain allowlisting requires dnsmasq DNS tier; "
+            f"active tier is {tier_str!r}. Use allow_ip() for static IP-based control."
+        )
+
+
 def _generate_entrypoint() -> str:
     """Return the self-contained OCI hook entrypoint script.
 
@@ -488,8 +509,13 @@ class HookMode:
         The IP-level allow (nft set update) is handled separately by
         ``allow_ip()`` — this method is the domain-tracking counterpart
         that ensures future IP rotations are also captured.
+
+        Raises:
+            RuntimeError: When the container is not using the dnsmasq DNS tier.
+                Use ``allow_ip()`` for static IP-based access control instead.
         """
         sd = self._config.state_dir.resolve()
+        _require_dnsmasq_tier(sd)
         if not dnsmasq.add_domain(sd, domain):
             return  # already present
         self._reload_dnsmasq(sd)
@@ -499,8 +525,12 @@ class HookMode:
 
         Counterpart of ``allow_domain()``.  Removes the domain so dnsmasq
         stops auto-populating nft sets for it on future DNS queries.
+
+        Raises:
+            RuntimeError: When the container is not using the dnsmasq DNS tier.
         """
         sd = self._config.state_dir.resolve()
+        _require_dnsmasq_tier(sd)
         if not dnsmasq.remove_domain(sd, domain):
             return  # not present
         self._reload_dnsmasq(sd)
