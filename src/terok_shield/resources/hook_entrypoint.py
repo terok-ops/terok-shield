@@ -7,14 +7,16 @@ Applies ``ruleset.nft`` (written by ``pre_start()``), discovers the container
 gateway dynamically from ``/proc/{pid}/net/route``, and optionally starts
 dnsmasq if ``dnsmasq.conf`` is present in the state directory.
 
-Zero ``terok_shield.*`` imports — only ``python3`` (stdlib), ``podman``,
-``nft``, ``nsenter``, and optionally ``dnsmasq`` are required.  This makes
-the hook independent of any specific Python virtualenv or install method.
+Zero ``terok_shield.*`` imports — only ``python3`` (stdlib), ``nft``,
+``nsenter``, and optionally ``dnsmasq`` are required.  This makes the hook
+independent of any specific Python virtualenv or install method.
 
-``podman unshare`` is used before ``nsenter`` so that nft runs with the
-user-namespace capabilities required for rootless containers (``CAP_NET_ADMIN``
-inside the container's user namespace), matching the behaviour of
-``SubprocessRunner.nft_via_nsenter()``.
+``nsenter -U -n -t <pid>`` is used to enter both the container's user
+namespace and network namespace in a single call.  The ``-U`` flag enters
+the user namespace that owns the network namespace, granting
+``CAP_NET_ADMIN`` (required by nft) and ``CAP_NET_BIND_SERVICE``
+(required by dnsmasq on port 53) without relying on ``podman`` being
+present in the OCI hook's execution environment.
 """
 
 import ipaddress
@@ -28,7 +30,7 @@ import sys
 from pathlib import Path
 
 # These constants are intentionally duplicated from src/terok_shield/state.py
-# so this script stays free of terok_shield imports.  Keep in sync:
+# so this script stays stdlib-only (no terok_shield imports).  Keep in sync:
 #   _BUNDLE_VERSION  ↔  state.BUNDLE_VERSION
 #   "ruleset.nft"    ↔  state.ruleset_path()
 #   "gateway"        ↔  state.gateway_path()
@@ -55,20 +57,16 @@ def _find_dnsmasq() -> str:
     return shutil.which("dnsmasq") or "/usr/sbin/dnsmasq"
 
 
-def _find_podman() -> str:
-    """Return the path to the podman binary, falling back to /usr/bin/podman."""
-    return shutil.which("podman") or "/usr/bin/podman"
-
-
 def _nsenter(pid: str, *cmd: str, stdin: str | None = None) -> None:
-    """Run *cmd* inside the container's network namespace.
+    """Run *cmd* inside the container's user+network namespace via nsenter.
 
-    Uses ``podman unshare nsenter -n`` so the subprocess inherits the
-    user-namespace capabilities (``CAP_NET_ADMIN``) needed for rootless nft
-    and for dnsmasq to bind to port 53 — matching ``SubprocessRunner.nft_via_nsenter()``.
+    ``-U`` enters the user namespace that owns the network namespace, granting
+    ``CAP_NET_ADMIN`` and ``CAP_NET_BIND_SERVICE`` without requiring ``podman``
+    to be in PATH.  ``-n`` enters the network namespace itself.  Both use the
+    target process PID (``-t <pid>``).
     """
     subprocess.run(  # nosec B603
-        [_find_podman(), "unshare", _find_nsenter(), "-t", pid, "-n", "--", *cmd],
+        [_find_nsenter(), "-U", "-n", "-t", pid, "--", *cmd],
         input=stdin,
         text=stdin is not None,
         check=True,
