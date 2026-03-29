@@ -72,13 +72,14 @@ def _nsenter(pid: str, *cmd: str, stdin: str | None = None) -> None:
         [_find_nsenter(), "-U", "-n", "-t", pid, "--", *cmd],
         input=stdin,
         text=True,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if result.returncode != 0:
-        stderr = result.stderr.strip()
+        # Combine stdout and stderr — some nft versions write errors to stdout.
+        combined = (result.stderr + result.stdout).strip()
         raise RuntimeError(
-            f"nsenter command failed (exit {result.returncode})"
-            + (f":\n{stderr}" if stderr else "")
+            f"nsenter command failed (exit {result.returncode}) cmd={cmd!r}"
+            + (f":\n{combined}" if combined else " (no output)")
         )
 
 
@@ -104,6 +105,13 @@ def _read_gateway(pid: str) -> str:
 
 def _createruntime(pid: str, sd: Path) -> None:
     """Apply the pre-generated ruleset and optionally start dnsmasq."""
+    # Verify the target PID's namespace files exist before invoking nsenter.
+    ns_user = Path(f"/proc/{pid}/ns/user")
+    ns_net = Path(f"/proc/{pid}/ns/net")
+    missing = [str(p) for p in (ns_user, ns_net) if not p.exists()]
+    if missing:
+        raise RuntimeError(f"namespace files missing for pid {pid}: {missing}")
+
     ruleset = sd / "ruleset.nft"
     if not ruleset.exists():
         raise RuntimeError(f"ruleset.nft not found: {ruleset}")

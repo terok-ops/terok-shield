@@ -12,7 +12,6 @@ import io
 import json
 import socket
 import struct
-import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -160,7 +159,7 @@ def test_nsenter_runs_subprocess_in_netns() -> None:
         ["/usr/bin/nsenter", "-U", "-n", "-t", "99", "--", "nft", "-f", "/tmp/r.nft"],
         input=None,
         text=True,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
 
@@ -183,10 +182,11 @@ def test_nsenter_passes_stdin_as_text() -> None:
 
 
 def test_nsenter_raises_runtime_error_with_stderr_on_failure() -> None:
-    """_nsenter() raises RuntimeError containing the subprocess stderr on failure."""
+    """_nsenter() raises RuntimeError containing combined stdout+stderr on failure."""
     mock_result = mock.MagicMock()
     mock_result.returncode = 1
     mock_result.stderr = "Error: syntax error in ruleset"
+    mock_result.stdout = ""
     with mock.patch(
         "terok_shield.resources.hook_entrypoint.subprocess.run", return_value=mock_result
     ):
@@ -198,15 +198,60 @@ def test_nsenter_raises_runtime_error_with_stderr_on_failure() -> None:
                 hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
 
 
+def test_nsenter_includes_stdout_in_error_when_stderr_empty() -> None:
+    """_nsenter() includes stdout in error message when stderr is empty."""
+    mock_result = mock.MagicMock()
+    mock_result.returncode = 1
+    mock_result.stderr = ""
+    mock_result.stdout = "stdout error text"
+    with mock.patch(
+        "terok_shield.resources.hook_entrypoint.subprocess.run", return_value=mock_result
+    ):
+        with mock.patch(
+            "terok_shield.resources.hook_entrypoint._find_nsenter",
+            return_value="/usr/bin/nsenter",
+        ):
+            with pytest.raises(RuntimeError, match="stdout error text"):
+                hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
+
+
+def test_nsenter_reports_no_output_when_both_empty() -> None:
+    """_nsenter() reports '(no output)' when both stdout and stderr are empty on failure."""
+    mock_result = mock.MagicMock()
+    mock_result.returncode = 1
+    mock_result.stderr = ""
+    mock_result.stdout = ""
+    with mock.patch(
+        "terok_shield.resources.hook_entrypoint.subprocess.run", return_value=mock_result
+    ):
+        with mock.patch(
+            "terok_shield.resources.hook_entrypoint._find_nsenter",
+            return_value="/usr/bin/nsenter",
+        ):
+            with pytest.raises(RuntimeError, match=r"\(no output\)"):
+                hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
+
+
 # ── _createruntime ────────────────────────────────────────────────────────────
+
+
+def test_createruntime_raises_when_namespace_files_missing(tmp_path: Path) -> None:
+    """_createruntime() raises RuntimeError when /proc/<pid>/ns/* files are absent."""
+    sd = tmp_path / "sd"
+    sd.mkdir()
+    (sd / "ruleset.nft").write_text("table inet terok_shield {}")
+    with pytest.raises(RuntimeError, match="namespace files missing"):
+        hook_entrypoint._createruntime("99999999", sd)
 
 
 def test_createruntime_raises_when_ruleset_missing(tmp_path: Path) -> None:
     """_createruntime() raises RuntimeError when ruleset.nft is absent."""
     sd = tmp_path / "sd"
     sd.mkdir()
+    # PID 1 (init) always has /proc/1/ns/{user,net} on Linux.
+    # sd/ruleset.nft is not created, so the ruleset check fires next.
     with pytest.raises(RuntimeError, match="ruleset.nft not found"):
-        hook_entrypoint._createruntime("42", sd)
+        hook_entrypoint._createruntime("1", sd)
 
 
 def test_createruntime_applies_ruleset_without_gateway(tmp_path: Path) -> None:
@@ -217,7 +262,7 @@ def test_createruntime_applies_ruleset_without_gateway(tmp_path: Path) -> None:
 
     with mock.patch("terok_shield.resources.hook_entrypoint._nsenter") as mock_ns:
         with mock.patch("terok_shield.resources.hook_entrypoint._read_gateway", return_value=""):
-            hook_entrypoint._createruntime("42", sd)
+            hook_entrypoint._createruntime("1", sd)
 
     # Only one nsenter call — apply the ruleset
     assert mock_ns.call_count == 1
@@ -241,7 +286,7 @@ def test_createruntime_populates_gateway_set_when_discovered(tmp_path: Path) -> 
                 "terok_shield.resources.hook_entrypoint._find_nft",
                 return_value="/usr/sbin/nft",
             ):
-                hook_entrypoint._createruntime("42", sd)
+                hook_entrypoint._createruntime("1", sd)
 
     # Two nsenter calls: apply ruleset + add element to gateway_v4
     assert mock_ns.call_count == 2
@@ -272,7 +317,7 @@ def test_createruntime_starts_dnsmasq_when_conf_present(tmp_path: Path) -> None:
                 "terok_shield.resources.hook_entrypoint.Path",
                 side_effect=lambda s: fake_resolv if "resolv.conf" in str(s) else Path(s),
             ):
-                hook_entrypoint._createruntime("42", sd)
+                hook_entrypoint._createruntime("1", sd)
 
     # nsenter called twice: apply ruleset + launch dnsmasq
     assert mock_ns.call_count == 2
@@ -302,7 +347,7 @@ def test_createruntime_ignores_oserror_writing_resolv_conf(tmp_path: Path) -> No
                 "terok_shield.resources.hook_entrypoint.Path",
                 side_effect=_path_side_effect,
             ):
-                hook_entrypoint._createruntime("42", sd)  # must not raise
+                hook_entrypoint._createruntime("1", sd)  # must not raise
 
 
 # ── _is_our_dnsmasq ───────────────────────────────────────────────────────────
