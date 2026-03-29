@@ -172,7 +172,18 @@ def test_nsenter_runs_subprocess_in_netns() -> None:
             hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
 
     mock_run.assert_called_once_with(
-        ["/usr/bin/podman", "unshare", "/usr/bin/nsenter", "-t", "99", "-n", "--", "nft", "-f", "/tmp/r.nft"],
+        [
+            "/usr/bin/podman",
+            "unshare",
+            "/usr/bin/nsenter",
+            "-t",
+            "99",
+            "-n",
+            "--",
+            "nft",
+            "-f",
+            "/tmp/r.nft",
+        ],
         input=None,
         text=False,
         check=True,
