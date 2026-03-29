@@ -7,17 +7,17 @@ Applies ``ruleset.nft`` (written by ``pre_start()``), discovers the container
 gateway dynamically from ``/proc/{pid}/net/route``, and optionally starts
 dnsmasq if ``dnsmasq.conf`` is present in the state directory.
 
-Zero ``terok_shield.*`` imports — only ``python3`` (stdlib), ``nft``,
-``nsenter``, and optionally ``dnsmasq`` are required.  This makes the hook
-independent of any specific Python virtualenv or install method.
+Zero ``terok_shield.*`` imports — only ``python3`` (stdlib), ``podman``,
+``nft``, ``nsenter``, and optionally ``dnsmasq`` are required.  This makes
+the hook independent of any specific Python virtualenv or install method.
 
-``nsenter -n -t <pid>`` is used to enter the container's network namespace.
-No ``-U`` flag is passed: the OCI hook is spawned by crun inside the rootless
-user namespace (``NS_ROOTLESS``) that owns the container's network namespace,
-so the hook already carries ``CAP_NET_ADMIN``.  Adding ``-U -t <container_pid>``
-would move into the container's child user namespace (``NS_CONTAINER``) which
-does *not* have ``CAP_NET_ADMIN`` over a network namespace owned by its parent,
-causing nft and dnsmasq to fail silently with exit 1.
+``podman unshare nsenter -n -t <pid>`` is used to enter the container's
+network namespace.  The OCI hook runs as the login user (uid 1000) in the
+initial user namespace with no elevated capabilities.  ``podman unshare``
+enters the rootless user namespace (NS_ROOTLESS) where the hook gains
+``CAP_NET_ADMIN`` over the container's network namespace; ``nsenter -n``
+then enters that network namespace.  This mirrors
+``SubprocessRunner.nft_via_nsenter()`` in ``run.py``.
 """
 
 import ipaddress
@@ -43,6 +43,11 @@ _BUNDLE_VERSION = 3
 _TABLE = "inet terok_shield"
 
 
+def _find_podman() -> str:
+    """Return the path to the podman binary, falling back to /usr/bin/podman."""
+    return shutil.which("podman") or "/usr/bin/podman"
+
+
 def _find_nsenter() -> str:
     """Return the path to the nsenter binary, falling back to /usr/bin/nsenter."""
     return shutil.which("nsenter") or "/usr/bin/nsenter"
@@ -59,20 +64,19 @@ def _find_dnsmasq() -> str:
 
 
 def _nsenter(pid: str, *cmd: str, stdin: str | None = None) -> None:
-    """Run *cmd* inside the container's network namespace via nsenter.
+    """Run *cmd* inside the container's network namespace via podman unshare + nsenter.
 
-    The OCI hook is spawned by crun inside the rootless user namespace
-    (``NS_ROOTLESS``) that owns the container's network namespace.  Entering
-    the container's user namespace via ``-U`` would move us into a *child*
-    namespace (``NS_CONTAINER``) that does NOT have ``CAP_NET_ADMIN`` over a
-    network namespace owned by its parent — causing nft to silently exit 1.
-    We therefore only enter the network namespace (``-n -t <pid>``); the hook
-    already carries the correct capabilities from ``NS_ROOTLESS``.
+    The OCI hook runs as the login user (uid 1000) in the initial user namespace
+    (NS_INIT) with no elevated capabilities.  ``podman unshare`` enters the
+    rootless user namespace (NS_ROOTLESS) where the hook gets ``CAP_NET_ADMIN``
+    over the container's network namespace (created by pasta/slirp4netns inside
+    NS_ROOTLESS).  ``nsenter -n -t <pid>`` then enters the container's network
+    namespace.  This mirrors ``SubprocessRunner.nft_via_nsenter()`` in run.py.
 
     Captures both stdout and stderr — some nft versions write errors to stdout.
     """
     result = subprocess.run(  # nosec B603
-        [_find_nsenter(), "-n", "-t", pid, "--", *cmd],
+        [_find_podman(), "unshare", _find_nsenter(), "-n", "-t", pid, "--", *cmd],
         input=stdin,
         text=True,
         capture_output=True,
@@ -108,12 +112,10 @@ def _read_gateway(pid: str) -> str:
 
 def _createruntime(pid: str, sd: Path) -> None:
     """Apply the pre-generated ruleset and optionally start dnsmasq."""
-    # Verify the target PID's namespace files exist before invoking nsenter.
-    ns_user = Path(f"/proc/{pid}/ns/user")
+    # Verify the target PID's network namespace file exists before invoking nsenter.
     ns_net = Path(f"/proc/{pid}/ns/net")
-    missing = [str(p) for p in (ns_user, ns_net) if not p.exists()]
-    if missing:
-        raise RuntimeError(f"namespace files missing for pid {pid}: {missing}")
+    if not ns_net.exists():
+        raise RuntimeError(f"network namespace file missing for pid {pid}: {ns_net}")
 
     ruleset = sd / "ruleset.nft"
     if not ruleset.exists():

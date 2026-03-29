@@ -143,11 +143,11 @@ def test_read_gateway_returns_empty_on_malformed_hex() -> None:
 
 
 def test_nsenter_runs_subprocess_in_netns() -> None:
-    """_nsenter() invokes nsenter -n -t (no -U) inside the container's network namespace.
+    """_nsenter() uses 'podman unshare nsenter -n -t' to enter the container's netns.
 
-    The hook already runs in the rootless user namespace (NS_ROOTLESS) that owns
-    the container's network namespace, so -U must NOT be passed — entering the
-    container's child user namespace (NS_CONTAINER) would lose CAP_NET_ADMIN.
+    The hook runs as uid 1000 in the initial user namespace with no elevated
+    capabilities.  podman unshare enters NS_ROOTLESS (granting CAP_NET_ADMIN);
+    nsenter -n -t <pid> then enters the container's network namespace.
     """
     mock_result = mock.MagicMock()
     mock_result.returncode = 0
@@ -155,13 +155,17 @@ def test_nsenter_runs_subprocess_in_netns() -> None:
         "terok_shield.resources.hook_entrypoint.subprocess.run", return_value=mock_result
     ) as mock_run:
         with mock.patch(
-            "terok_shield.resources.hook_entrypoint._find_nsenter",
-            return_value="/usr/bin/nsenter",
+            "terok_shield.resources.hook_entrypoint._find_podman",
+            return_value="/usr/bin/podman",
         ):
-            hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
+            with mock.patch(
+                "terok_shield.resources.hook_entrypoint._find_nsenter",
+                return_value="/usr/bin/nsenter",
+            ):
+                hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
 
     mock_run.assert_called_once_with(
-        ["/usr/bin/nsenter", "-n", "-t", "99", "--", "nft", "-f", "/tmp/r.nft"],
+        ["/usr/bin/podman", "unshare", "/usr/bin/nsenter", "-n", "-t", "99", "--", "nft", "-f", "/tmp/r.nft"],
         input=None,
         text=True,
         capture_output=True,
@@ -241,11 +245,11 @@ def test_nsenter_reports_no_output_when_both_empty() -> None:
 
 
 def test_createruntime_raises_when_namespace_files_missing(tmp_path: Path) -> None:
-    """_createruntime() raises RuntimeError when /proc/<pid>/ns/* files are absent."""
+    """_createruntime() raises RuntimeError when /proc/<pid>/ns/net is absent."""
     sd = tmp_path / "sd"
     sd.mkdir()
     (sd / "ruleset.nft").write_text("table inet terok_shield {}")
-    with pytest.raises(RuntimeError, match="namespace files missing"):
+    with pytest.raises(RuntimeError, match="network namespace file missing"):
         hook_entrypoint._createruntime("99999999", sd)
 
 
