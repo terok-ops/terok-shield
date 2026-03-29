@@ -11,12 +11,13 @@ Zero ``terok_shield.*`` imports — only ``python3`` (stdlib), ``nft``,
 ``nsenter``, and optionally ``dnsmasq`` are required.  This makes the hook
 independent of any specific Python virtualenv or install method.
 
-``nsenter -U -n -t <pid>`` is used to enter both the container's user
-namespace and network namespace in a single call.  The ``-U`` flag enters
-the user namespace that owns the network namespace, granting
-``CAP_NET_ADMIN`` (required by nft) and ``CAP_NET_BIND_SERVICE``
-(required by dnsmasq on port 53) without relying on ``podman`` being
-present in the OCI hook's execution environment.
+``nsenter -n -t <pid>`` is used to enter the container's network namespace.
+No ``-U`` flag is passed: the OCI hook is spawned by crun inside the rootless
+user namespace (``NS_ROOTLESS``) that owns the container's network namespace,
+so the hook already carries ``CAP_NET_ADMIN``.  Adding ``-U -t <container_pid>``
+would move into the container's child user namespace (``NS_CONTAINER``) which
+does *not* have ``CAP_NET_ADMIN`` over a network namespace owned by its parent,
+causing nft and dnsmasq to fail silently with exit 1.
 """
 
 import ipaddress
@@ -58,18 +59,20 @@ def _find_dnsmasq() -> str:
 
 
 def _nsenter(pid: str, *cmd: str, stdin: str | None = None) -> None:
-    """Run *cmd* inside the container's user+network namespace via nsenter.
+    """Run *cmd* inside the container's network namespace via nsenter.
 
-    ``-U`` enters the user namespace that owns the network namespace, granting
-    ``CAP_NET_ADMIN`` and ``CAP_NET_BIND_SERVICE`` without requiring ``podman``
-    to be in PATH.  ``-n`` enters the network namespace itself.  Both use the
-    target process PID (``-t <pid>``).
+    The OCI hook is spawned by crun inside the rootless user namespace
+    (``NS_ROOTLESS``) that owns the container's network namespace.  Entering
+    the container's user namespace via ``-U`` would move us into a *child*
+    namespace (``NS_CONTAINER``) that does NOT have ``CAP_NET_ADMIN`` over a
+    network namespace owned by its parent — causing nft to silently exit 1.
+    We therefore only enter the network namespace (``-n -t <pid>``); the hook
+    already carries the correct capabilities from ``NS_ROOTLESS``.
 
-    Captures stderr so error details appear in the hook's log rather than
-    being silently swallowed by the OCI runtime (crun/runc).
+    Captures both stdout and stderr — some nft versions write errors to stdout.
     """
     result = subprocess.run(  # nosec B603
-        [_find_nsenter(), "-U", "-n", "-t", pid, "--", *cmd],
+        [_find_nsenter(), "-n", "-t", pid, "--", *cmd],
         input=stdin,
         text=True,
         capture_output=True,

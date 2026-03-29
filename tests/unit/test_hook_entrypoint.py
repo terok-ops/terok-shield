@@ -143,7 +143,12 @@ def test_read_gateway_returns_empty_on_malformed_hex() -> None:
 
 
 def test_nsenter_runs_subprocess_in_netns() -> None:
-    """_nsenter() invokes nsenter -U -n -t inside the container's user+network namespace."""
+    """_nsenter() invokes nsenter -n -t (no -U) inside the container's network namespace.
+
+    The hook already runs in the rootless user namespace (NS_ROOTLESS) that owns
+    the container's network namespace, so -U must NOT be passed — entering the
+    container's child user namespace (NS_CONTAINER) would lose CAP_NET_ADMIN.
+    """
     mock_result = mock.MagicMock()
     mock_result.returncode = 0
     with mock.patch(
@@ -156,7 +161,7 @@ def test_nsenter_runs_subprocess_in_netns() -> None:
             hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
 
     mock_run.assert_called_once_with(
-        ["/usr/bin/nsenter", "-U", "-n", "-t", "99", "--", "nft", "-f", "/tmp/r.nft"],
+        ["/usr/bin/nsenter", "-n", "-t", "99", "--", "nft", "-f", "/tmp/r.nft"],
         input=None,
         text=True,
         capture_output=True,
