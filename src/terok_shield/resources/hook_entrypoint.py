@@ -161,7 +161,12 @@ def _createruntime(pid: str, sd: Path) -> None:
     if not ruleset.exists():
         raise RuntimeError(f"ruleset.nft not found: {ruleset}")
     nft = _find_nft()
-    _nsenter(pid, nft, "-f", str(ruleset))
+    # Read the ruleset in Python and feed it to nft via stdin ("-f -").
+    # nft runs as iptables_t (SELinux domain); that domain cannot read files
+    # in data_home_t (~/.local/share/…).  Piping via stdin bypasses the
+    # file-read restriction — the hook process (not nft) reads the file.
+    # This matches the pre-PR hook which also piped the ruleset via stdin.
+    _nsenter(pid, nft, "-f", "-", stdin=ruleset.read_text())
 
     # Discover gateway from routing table, persist, and populate nft set.
     # Clear any stale file from a previous run so shield_up() doesn't

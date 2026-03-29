@@ -348,10 +348,11 @@ def test_createruntime_applies_ruleset_without_gateway(tmp_path: Path) -> None:
         with mock.patch("terok_shield.resources.hook_entrypoint._read_gateway", return_value=""):
             hook_entrypoint._createruntime("1", sd)
 
-    # Only one nsenter call — apply the ruleset
+    # Only one nsenter call — apply the ruleset via stdin (not file path)
     assert mock_ns.call_count == 1
     args = mock_ns.call_args.args
-    assert str(sd / "ruleset.nft") in args
+    assert "-" in args  # nft -f - (stdin)
+    assert mock_ns.call_args.kwargs.get("stdin") == "table inet terok_shield {}"
     # No gateway file written
     assert not (sd / "gateway").exists()
 
