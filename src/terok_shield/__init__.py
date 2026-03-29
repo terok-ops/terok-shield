@@ -14,20 +14,9 @@ The primary entry point is the ``Shield`` facade class:
 
 import logging
 from collections.abc import Iterator
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
-
-__version__: str = "0.0.0"  # placeholder; replaced at build time
-
-from importlib.metadata import PackageNotFoundError, version as _meta_version
-
-try:
-    __version__ = _meta_version("terok-shield")
-except PackageNotFoundError:
-    pass  # editable install or running from source without metadata
-
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version as _meta_version
+from pathlib import Path
 
 from . import dnsmasq, state
 from .audit import AuditLogger
@@ -54,6 +43,14 @@ from .run import (
     SubprocessRunner,
 )
 from .util import is_ip as _is_ip
+
+logger = logging.getLogger(__name__)
+
+__version__: str = "0.0.0"  # placeholder; replaced at build time
+try:
+    __version__ = _meta_version("terok-shield")
+except PackageNotFoundError:
+    pass  # editable install or running from source without metadata
 
 
 @dataclass(frozen=True)
