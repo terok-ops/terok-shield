@@ -317,8 +317,13 @@ class HookMode:
             domains = dnsmasq.read_merged_domains(sd)
             conf = dnsmasq.generate_config(upstream_dns, domains, state.dnsmasq_pid_path(sd))
             state.dnsmasq_conf_path(sd).write_text(conf)
+            state.resolv_conf_path(sd).write_text("nameserver 127.0.0.1\noptions ndots:0\n")
         else:
-            for stale in (state.dnsmasq_conf_path(sd), state.dnsmasq_pid_path(sd)):
+            for stale in (
+                state.dnsmasq_conf_path(sd),
+                state.dnsmasq_pid_path(sd),
+                state.resolv_conf_path(sd),
+            ):
                 stale.unlink(missing_ok=True)
 
         # Build podman args
@@ -350,6 +355,28 @@ class HookMode:
                     "--add-host",
                     "host.containers.internal:127.0.0.1",
                 ]
+
+        # Redirect container DNS through the per-container dnsmasq instance.
+        #
+        # With pasta networking, podman normally generates /etc/resolv.conf pointing
+        # to pasta's DNS proxy (169.254.1.1) and bind-mounts it read-only.  We need
+        # the container to use 127.0.0.1 (dnsmasq) instead so that every DNS
+        # resolution populates the nft allow sets via --nftset — enabling dynamic
+        # domain-based egress control.
+        #
+        # --dns 127.0.0.1 cannot be used: podman passes it to pasta as a DNS-splice
+        # target, causing pasta to bind HOST UDP/TCP port 53.  Port 53 is privileged
+        # (< 1024) and rootless pasta lacks CAP_NET_BIND_SERVICE, so the container
+        # fails to start.
+        #
+        # Instead, pre_start writes resolv.conf to the state directory and passes
+        # it as an explicit volume mount.  Podman detects the user-supplied mount
+        # and skips its own resolv.conf generation entirely — pasta's DNS proxy
+        # never appears in the container's resolver list.  The :ro flag prevents
+        # the container payload from redirecting DNS away from dnsmasq, which would
+        # silently break dynamic domain allowlisting.
+        if tier == DnsTier.DNSMASQ:
+            args += ["--volume", f"{state.resolv_conf_path(sd)}:/etc/resolv.conf:ro"]
 
         # Annotations: profiles, name, state_dir, loopback_ports, version, dns
         ports_str = ",".join(str(p) for p in self._config.loopback_ports)

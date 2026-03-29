@@ -462,54 +462,26 @@ def test_createruntime_populates_gateway_set_when_discovered(tmp_path: Path) -> 
 
 
 def test_createruntime_starts_dnsmasq_when_conf_present(tmp_path: Path) -> None:
-    """_createruntime() launches dnsmasq and writes resolv.conf when dnsmasq.conf exists."""
+    """_createruntime() launches dnsmasq when dnsmasq.conf is present.
+
+    resolv.conf is pre-written by pre_start() and bind-mounted :ro — the hook
+    does not write it.  This test verifies nsenter is called for the ruleset
+    apply and the dnsmasq launch, and nothing else.
+    """
     sd = tmp_path / "sd"
     sd.mkdir()
     (sd / "ruleset.nft").write_text("table inet terok_shield {}")
     dnsmasq_conf = sd / "dnsmasq.conf"
     dnsmasq_conf.write_text("[dnsmasq config]")
 
-    # Fake resolv.conf path inside "container"
-    fake_resolv = tmp_path / "resolv.conf"
-    fake_resolv.write_text("nameserver 1.1.1.1\n")
-
     with mock.patch("terok_shield.resources.hook_entrypoint._nsenter") as mock_ns:
         with mock.patch("terok_shield.resources.hook_entrypoint._read_gateway", return_value=""):
-            with mock.patch(
-                "terok_shield.resources.hook_entrypoint.Path",
-                side_effect=lambda s: fake_resolv if "resolv.conf" in str(s) else Path(s),
-            ):
-                hook_entrypoint._createruntime("1", sd)
+            hook_entrypoint._createruntime("1", sd)
 
-    # nsenter called twice: apply ruleset + launch dnsmasq
+    # nsenter called twice: apply ruleset + launch dnsmasq (no resolv.conf write)
     assert mock_ns.call_count == 2
     dnsmasq_call_args = mock_ns.call_args_list[1].args
     assert any("dnsmasq" in str(a) or "conf-file" in str(a) for a in dnsmasq_call_args)
-    assert fake_resolv.read_text() == "nameserver 127.0.0.1\noptions ndots:0\n"
-
-
-def test_createruntime_ignores_oserror_writing_resolv_conf(tmp_path: Path) -> None:
-    """_createruntime() swallows OSError when writing resolv.conf (non-fatal)."""
-    sd = tmp_path / "sd"
-    sd.mkdir()
-    (sd / "ruleset.nft").write_text("table inet terok_shield {}")
-    (sd / "dnsmasq.conf").write_text("[dnsmasq config]")
-
-    def _path_side_effect(s: str) -> Path:
-        p = Path(s)
-        if "resolv.conf" in str(s):
-            m = mock.MagicMock(spec=Path)
-            m.write_text.side_effect = OSError("read-only")
-            return m
-        return p
-
-    with mock.patch("terok_shield.resources.hook_entrypoint._nsenter"):
-        with mock.patch("terok_shield.resources.hook_entrypoint._read_gateway", return_value=""):
-            with mock.patch(
-                "terok_shield.resources.hook_entrypoint.Path",
-                side_effect=_path_side_effect,
-            ):
-                hook_entrypoint._createruntime("1", sd)  # must not raise
 
 
 # ── _is_our_dnsmasq ───────────────────────────────────────────────────────────

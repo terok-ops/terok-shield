@@ -959,9 +959,17 @@ class TestPreStartDnsTierBranches:
         sd = harness.config.state_dir.resolve()
         domains_content = state.profile_domains_path(sd).read_text()
         assert TEST_DOMAIN in domains_content
-        # No --dns flag: hook writes resolv.conf directly; --dns triggers pasta to
-        # bind host port 53 which fails rootless
+        # No --dns flag (triggers pasta to bind host port 53, fails rootless).
+        # Instead, resolv.conf is pre-written and bind-mounted :ro via --volume.
         assert "--dns" not in args
+        assert "--volume" in args
+        volume_args = [args[i + 1] for i, a in enumerate(args) if a == "--volume"]
+        assert any("/etc/resolv.conf:ro" in v for v in volume_args)
+        # The resolv.conf source file exists and points to dnsmasq
+        sd = harness.config.state_dir.resolve()
+        resolv = state.resolv_conf_path(sd)
+        assert resolv.is_file()
+        assert "127.0.0.1" in resolv.read_text()
 
     @mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
     def test_pre_start_getent_tier_resolves_all_entries(

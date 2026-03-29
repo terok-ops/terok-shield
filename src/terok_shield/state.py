@@ -23,6 +23,7 @@ Bundle layout::
     ├── deny.list                      # persistent deny overrides
     ├── dnsmasq.conf                   # generated dnsmasq configuration
     ├── dnsmasq.pid                    # dnsmasq PID (in container netns)
+    ├── resolv.conf                    # bind-mounted over /etc/resolv.conf (dnsmasq tier)
     └── audit.jsonl                    # per-container audit log
 """
 
@@ -119,6 +120,19 @@ def live_domains_path(state_dir: Path) -> Path:
 def denied_domains_path(state_dir: Path) -> Path:
     """Return the path to the denied domains file (from deny_domain)."""
     return state_dir / "denied.domains"
+
+
+def resolv_conf_path(state_dir: Path) -> Path:
+    """Return the path to the pre-written ``resolv.conf`` for the dnsmasq tier.
+
+    ``pre_start()`` writes ``nameserver 127.0.0.1`` here and passes
+    ``--volume {path}:/etc/resolv.conf:ro`` to podman.  Podman detects the
+    user-supplied mount and skips its automatic pasta-generated ``resolv.conf``,
+    so the container's DNS is directed to the per-container dnsmasq instance
+    at ``127.0.0.1:53``.  The read-only mount prevents the container payload
+    from redirecting DNS away from dnsmasq.
+    """
+    return state_dir / "resolv.conf"
 
 
 def read_allowed_ips(state_dir: Path) -> list[str]:
