@@ -181,27 +181,42 @@ def _poststop(sd: Path) -> None:
         pass
 
 
+def _log(msg: str, log_path: Path | None = None) -> None:
+    """Write *msg* to stderr and to a persistent log file (best-effort).
+
+    The OCI runtime (crun/runc) typically swallows hook stderr.  Writing to a
+    file in the state directory (or /tmp as fallback) makes errors visible.
+    """
+    print(msg, file=sys.stderr)
+    path = log_path or Path("/tmp/terok-hook-error.log")  # nosec B108
+    try:
+        with path.open("a") as f:
+            f.write(f"{msg}\n")
+    except OSError:
+        pass
+
+
 def main() -> int:
     """OCI hook entry point: dispatch to createRuntime or poststop handler."""
     stage = sys.argv[1] if len(sys.argv) > 1 else "createRuntime"
     try:
         oci = json.load(sys.stdin)
     except ValueError as exc:
-        print(f"terok-shield hook: bad OCI state: {exc}", file=sys.stderr)
+        _log(f"terok-shield hook: bad OCI state: {exc}")
         return 1
 
     if not isinstance(oci, dict):
-        print("terok-shield hook: OCI state must be a JSON object", file=sys.stderr)
+        _log("terok-shield hook: OCI state must be a JSON object")
         return 1
 
     ann = oci.get("annotations", {})
     if not isinstance(ann, dict):
-        print("terok-shield hook: annotations must be a JSON object", file=sys.stderr)
+        _log("terok-shield hook: annotations must be a JSON object")
         return 1
 
     sd_str = ann.get(_ANN_STATE_DIR, "")
     if not sd_str:
-        print("terok-shield hook: missing state_dir annotation", file=sys.stderr)
+        _log("terok-shield hook: missing state_dir annotation")
         return 1
     try:
         _p = Path(sd_str)
@@ -209,14 +224,18 @@ def main() -> int:
             raise ValueError(f"state_dir must be absolute: {sd_str!r}")
         sd = _p.resolve()
     except (ValueError, OSError) as exc:
-        print(f"terok-shield hook: invalid state_dir: {exc}", file=sys.stderr)
+        _log(f"terok-shield hook: invalid state_dir: {exc}")
         return 1
+
+    # All subsequent errors go to <state_dir>/hook-error.log so they survive
+    # even when the OCI runtime does not forward the hook's stderr.
+    log_path = sd / "hook-error.log"
 
     ver = ann.get(_ANN_VERSION, "")
     if not ver or str(ver) != str(_BUNDLE_VERSION):
-        print(
+        _log(
             f"terok-shield hook: bundle version {ver!r} != {_BUNDLE_VERSION}. Re-run pre_start().",
-            file=sys.stderr,
+            log_path,
         )
         return 1
     try:
@@ -225,11 +244,11 @@ def main() -> int:
         else:
             pid = str(oci.get("pid") or "")
             if not pid:
-                print("terok-shield hook: missing pid in OCI state", file=sys.stderr)
+                _log("terok-shield hook: missing pid in OCI state", log_path)
                 return 1
             _createruntime(pid, sd)
     except Exception as exc:  # noqa: BLE001
-        print(f"terok-shield hook: {exc}", file=sys.stderr)
+        _log(f"terok-shield hook: {exc}", log_path)
         return 1
     return 0
 
