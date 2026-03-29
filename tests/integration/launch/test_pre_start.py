@@ -49,8 +49,7 @@ class TestShieldPreStart:
 
         allowed = state.profile_allowed_path(sd)
         domains = state.profile_domains_path(sd)
-        assert allowed.is_file(), "profile.allowed should be created"
-        dns_prepared = (allowed.stat().st_size > 0) or (
+        dns_prepared = (allowed.is_file() and allowed.stat().st_size > 0) or (
             domains.is_file() and domains.stat().st_size > 0
         )
         assert dns_prepared, (

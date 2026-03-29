@@ -23,7 +23,7 @@ from terok_shield.resources import hook_entrypoint
 
 # Hex-encoded gateway for 10.0.2.2 as it appears in /proc/{pid}/net/route
 # (little-endian uint32: bytes 0A 00 02 02 → stored as 0202000A)
-_SLIRP_GW_HEX = format(struct.unpack("=I", socket.inet_aton("10.0.2.2"))[0], "08X")
+_SLIRP_GW_HEX = format(struct.unpack("<I", socket.inet_aton("10.0.2.2"))[0], "08X")
 
 # Route table header + one default route pointing to 10.0.2.2
 _ROUTE_WITH_DEFAULT = (
@@ -253,6 +253,7 @@ def test_createruntime_starts_dnsmasq_when_conf_present(tmp_path: Path) -> None:
     assert mock_ns.call_count == 2
     dnsmasq_call_args = mock_ns.call_args_list[1].args
     assert any("dnsmasq" in str(a) or "conf-file" in str(a) for a in dnsmasq_call_args)
+    assert fake_resolv.read_text() == "nameserver 127.0.0.1\nndots:0\n"
 
 
 def test_createruntime_ignores_oserror_writing_resolv_conf(tmp_path: Path) -> None:
@@ -279,19 +280,76 @@ def test_createruntime_ignores_oserror_writing_resolv_conf(tmp_path: Path) -> No
                 hook_entrypoint._createruntime("42", sd)  # must not raise
 
 
+# ── _is_our_dnsmasq ───────────────────────────────────────────────────────────
+
+
+def test_is_our_dnsmasq_returns_true_when_cmdline_matches(tmp_path: Path) -> None:
+    """_is_our_dnsmasq() returns True when cmdline contains 'dnsmasq' and our conf path."""
+    conf = tmp_path / "dnsmasq.conf"
+    cmdline = b"dnsmasq\x00--conf-file=" + str(conf).encode() + b"\x00"
+    with mock.patch.object(
+        hook_entrypoint.Path,
+        "read_bytes",
+        return_value=cmdline,
+    ):
+        assert hook_entrypoint._is_our_dnsmasq(1234, conf) is True
+
+
+def test_is_our_dnsmasq_returns_false_when_cmdline_missing(tmp_path: Path) -> None:
+    """_is_our_dnsmasq() returns False when /proc/{pid}/cmdline is unreadable."""
+    conf = tmp_path / "dnsmasq.conf"
+    with mock.patch.object(
+        hook_entrypoint.Path,
+        "read_bytes",
+        side_effect=OSError("no such file"),
+    ):
+        assert hook_entrypoint._is_our_dnsmasq(9999, conf) is False
+
+
+def test_is_our_dnsmasq_returns_false_when_conf_path_differs(tmp_path: Path) -> None:
+    """_is_our_dnsmasq() returns False when the conf file path doesn't match."""
+    conf = tmp_path / "dnsmasq.conf"
+    other_conf = tmp_path / "other" / "dnsmasq.conf"
+    cmdline = b"dnsmasq\x00--conf-file=" + str(other_conf).encode() + b"\x00"
+    with mock.patch.object(
+        hook_entrypoint.Path,
+        "read_bytes",
+        return_value=cmdline,
+    ):
+        assert hook_entrypoint._is_our_dnsmasq(1234, conf) is False
+
+
 # ── _poststop ─────────────────────────────────────────────────────────────────
 
 
 def test_poststop_sends_sigterm_to_dnsmasq(tmp_path: Path) -> None:
-    """_poststop() sends SIGTERM (signal 15) to the PID in dnsmasq.pid."""
+    """_poststop() sends SIGTERM (signal 15) when identity check passes."""
     sd = tmp_path / "sd"
     sd.mkdir()
     (sd / "dnsmasq.pid").write_text("12345\n")
 
-    with mock.patch("terok_shield.resources.hook_entrypoint.os.kill") as mock_kill:
+    with (
+        mock.patch("terok_shield.resources.hook_entrypoint._is_our_dnsmasq", return_value=True),
+        mock.patch("terok_shield.resources.hook_entrypoint.os.kill") as mock_kill,
+    ):
         hook_entrypoint._poststop(sd)
 
     mock_kill.assert_called_once_with(12345, 15)
+
+
+def test_poststop_skips_stale_pid(tmp_path: Path) -> None:
+    """_poststop() does not signal when the PID belongs to an unrelated process."""
+    sd = tmp_path / "sd"
+    sd.mkdir()
+    (sd / "dnsmasq.pid").write_text("12345\n")
+
+    with (
+        mock.patch("terok_shield.resources.hook_entrypoint._is_our_dnsmasq", return_value=False),
+        mock.patch("terok_shield.resources.hook_entrypoint.os.kill") as mock_kill,
+    ):
+        hook_entrypoint._poststop(sd)
+
+    mock_kill.assert_not_called()
 
 
 def test_poststop_is_noop_when_pid_file_absent(tmp_path: Path) -> None:
@@ -302,15 +360,18 @@ def test_poststop_is_noop_when_pid_file_absent(tmp_path: Path) -> None:
     hook_entrypoint._poststop(sd)
 
 
-def test_poststop_ignores_process_lookup_error(tmp_path: Path) -> None:
-    """_poststop() swallows ProcessLookupError (process already gone)."""
+def test_poststop_ignores_oserror_on_kill(tmp_path: Path) -> None:
+    """_poststop() swallows OSError from os.kill (process already gone)."""
     sd = tmp_path / "sd"
     sd.mkdir()
     (sd / "dnsmasq.pid").write_text("99999\n")
 
-    with mock.patch(
-        "terok_shield.resources.hook_entrypoint.os.kill",
-        side_effect=ProcessLookupError,
+    with (
+        mock.patch("terok_shield.resources.hook_entrypoint._is_our_dnsmasq", return_value=True),
+        mock.patch(
+            "terok_shield.resources.hook_entrypoint.os.kill",
+            side_effect=OSError,
+        ),
     ):
         hook_entrypoint._poststop(sd)  # must not raise
 

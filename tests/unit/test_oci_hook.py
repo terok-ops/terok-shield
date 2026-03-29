@@ -510,6 +510,16 @@ def test_hook_main_invalid_dns_tier_returns_1(
     assert hook_main(_oci_state(annotations=annotations)) == 1
 
 
+def test_hook_main_invalid_upstream_dns_returns_1(
+    hook_main_harness: HookMainHarness,
+    tmp_path: Path,
+) -> None:
+    """hook_main() returns 1 when upstream DNS annotation is not a valid IP address."""
+    annotations = _valid_annotations(tmp_path)
+    annotations[ANNOTATION_UPSTREAM_DNS_KEY] = "not-an-ip"
+    assert hook_main(_oci_state(annotations=annotations)) == 1
+
+
 def test_load_and_add_ips_logs_broad_cidr(tmp_path: Path) -> None:
     """_load_and_add_ips() emits a 'broad range' audit event for broad CIDRs."""
     from terok_shield.oci_hook import HookExecutor

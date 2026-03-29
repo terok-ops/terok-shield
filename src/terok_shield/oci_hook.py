@@ -408,7 +408,10 @@ def hook_main(stdin_data: str | None = None, stage: str = "createRuntime") -> in
         # Validate annotation data before use
         from .nft import safe_ip
 
-        safe_ip(dns)
+        try:
+            safe_ip(dns)
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid upstream DNS address: {dns!r}") from exc
         if dns_tier_str and dns_tier_str not in {t.value for t in DnsTier}:
             raise RuntimeError(f"Invalid dns_tier annotation: {dns_tier_str!r}")
 
