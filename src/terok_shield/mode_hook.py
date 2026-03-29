@@ -338,12 +338,16 @@ class HookMode:
                 ]
             else:
                 tcp_flags = ",".join(f"-T,{p}" for p in self._config.loopback_ports)
-                # -u,none: disable host→container UDP forwarding.  With -u,auto pasta
-                # tries to bind every UDP port the host has open (including port 53 if
-                # systemd-resolved is running), which requires CAP_NET_BIND_SERVICE and
-                # fails rootless.  Container→internet UDP and pasta's internal DNS proxy
-                # at 169.254.1.1 are handled by pasta's NAT and are unaffected by -u.
-                pasta_arg = f"pasta:-t,auto,-u,none,{tcp_flags},-U,auto" if tcp_flags else "pasta"
+                # -t,none / -u,none: disable host→container port forwarding.
+                # With -t,auto or -u,auto pasta detects every port the host is
+                # listening on (including port 53 from systemd-resolved) and tries
+                # to bind them, which requires CAP_NET_BIND_SERVICE and fails
+                # rootless.  Terok containers only make outbound connections;
+                # inbound host→container forwarding is not needed.
+                # The -T flags below handle container-internal loopback redirects;
+                # container→internet and pasta's DNS proxy at 169.254.1.1 work via
+                # pasta's own NAT and are unaffected by -t/-u.
+                pasta_arg = f"pasta:-t,none,-u,none,{tcp_flags},-U,auto" if tcp_flags else "pasta"
                 args += [
                     "--network",
                     pasta_arg,
