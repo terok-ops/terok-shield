@@ -218,7 +218,7 @@ class RulesetBuilder:
         """Classify IPs by family and generate add-element commands for both sets.
 
         When the builder has a ``set_timeout`` configured (dnsmasq tier),
-        permanent IPs are written with ``timeout 0`` so they do not auto-expire
+        permanent IPs are written with ``timeout 0s`` so they do not auto-expire
         along with dnsmasq-learned entries.
         """
         return add_elements_dual(ips, permanent=bool(self._set_timeout))
@@ -406,7 +406,7 @@ def add_elements(
 
     Args:
         timeout_zero: When ``True``, each element is annotated with
-            ``timeout 0`` so it never expires, even in sets that carry a
+            ``timeout 0s`` so it never expires, even in sets that carry a
             default element timeout (dnsmasq tier).
     """
     _safe_ident(set_name)
@@ -416,7 +416,7 @@ def add_elements(
     if not valid:
         return ""
     if timeout_zero:
-        elements = ", ".join(f"{ip} timeout 0" for ip in valid)
+        elements = ", ".join(f"{ip} timeout 0s" for ip in valid)
     else:
         elements = ", ".join(valid)
     return f"add element {table} {set_name} {{ {elements} }}\n"
@@ -429,7 +429,7 @@ def add_elements_dual(ips: list[str], *, permanent: bool = False) -> str:
     Returns empty string if no valid IPs.
 
     Args:
-        permanent: When ``True``, elements are annotated with ``timeout 0``
+        permanent: When ``True``, elements are annotated with ``timeout 0s``
             so they never expire in sets that carry a default timeout
             (dnsmasq tier).  Permanent IPs (profile/live allowlists) must
             not be evicted by the same 30-minute expiry used for

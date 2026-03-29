@@ -256,7 +256,7 @@ def test_allow_ip_uses_timeout_zero_in_dnsmasq_tier(
     make_hook_mode: HookModeHarnessFactory,
     make_config: ConfigFactory,
 ) -> None:
-    """allow_ip() adds 'timeout 0' when dnsmasq tier is active so the element never expires."""
+    """allow_ip() adds 'timeout 0s' when dnsmasq tier is active so the element never expires."""
     harness = make_hook_mode(config=make_config())
     sd = harness.config.state_dir.resolve()
     state.dns_tier_path(sd).write_text("dnsmasq\n")
@@ -271,7 +271,7 @@ def test_allow_ip_no_timeout_zero_without_dnsmasq_tier(
     make_hook_mode: HookModeHarnessFactory,
     make_config: ConfigFactory,
 ) -> None:
-    """allow_ip() omits 'timeout 0' when dnsmasq tier is not active."""
+    """allow_ip() omits 'timeout 0s' when dnsmasq tier is not active."""
     harness = make_hook_mode(config=make_config())
     sd = harness.config.state_dir.resolve()
     state.dns_tier_path(sd).write_text("dig\n")

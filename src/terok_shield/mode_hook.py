@@ -436,7 +436,7 @@ class HookMode:
                 dp.write_text("".join(f"{d}\n" for d in sorted(denied)))
 
         # When the dnsmasq set has a default timeout (30 m), permanent IPs must use
-        # 'timeout 0' so they are never evicted by the set's per-element expiry clock.
+        # 'timeout 0s' so they are never evicted by the set's per-element expiry clock.
         tier_path = state.dns_tier_path(sd)
         if tier_path.is_file() and tier_path.read_text().strip() == DnsTier.DNSMASQ.value:
             element = f"{{ {ip} timeout 0s }}"

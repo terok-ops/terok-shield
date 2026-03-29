@@ -142,15 +142,15 @@ class TestRulesetBuilderAddElementsDual:
         """add_elements_dual on a builder without set_timeout emits plain IPs."""
         builder = RulesetBuilder()  # no set_timeout
         result = builder.add_elements_dual([TEST_IP1])
-        assert "timeout 0" not in result
+        assert "timeout 0s" not in result
         assert TEST_IP1 in result
 
     def test_add_elements_dual_with_set_timeout_adds_timeout_zero(self) -> None:
-        """add_elements_dual on a dnsmasq-tier builder emits 'timeout 0' per element.
+        """add_elements_dual on a dnsmasq-tier builder emits 'timeout 0s' per element.
 
         Permanent IPs must not expire with the 30-minute set default timeout
         that dnsmasq-learned entries use.
         """
         builder = RulesetBuilder(set_timeout="30m")
         result = builder.add_elements_dual([TEST_IP1])
-        assert f"{TEST_IP1} timeout 0" in result
+        assert f"{TEST_IP1} timeout 0s" in result
