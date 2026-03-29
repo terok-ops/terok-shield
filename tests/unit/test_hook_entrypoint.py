@@ -60,9 +60,13 @@ def test_bootstrap_env_sets_home_when_absent() -> None:
     import pwd as _pwd
 
     env = {"XDG_RUNTIME_DIR": "/run/user/1000", "PATH": "/usr/bin"}
-    fake_entry = _pwd.struct_passwd(("testuser", "x", 1000, 1000, "", "/home/testuser", "/bin/bash"))
+    fake_entry = _pwd.struct_passwd(
+        ("testuser", "x", 1000, 1000, "", "/home/testuser", "/bin/bash")
+    )
     with mock.patch.dict("os.environ", env, clear=True):
-        with mock.patch("terok_shield.resources.hook_entrypoint.pwd.getpwuid", return_value=fake_entry):
+        with mock.patch(
+            "terok_shield.resources.hook_entrypoint.pwd.getpwuid", return_value=fake_entry
+        ):
             hook_entrypoint._bootstrap_env()
         assert os.environ["HOME"] == "/home/testuser"
 
@@ -240,7 +244,18 @@ def test_nsenter_uses_podman_unshare_when_uid_is_nonzero() -> None:
                     hook_entrypoint._nsenter("99", "nft", "-f", "/tmp/r.nft")
 
     mock_run.assert_called_once_with(
-        ["/usr/bin/podman", "unshare", "/usr/bin/nsenter", "-n", "-t", "99", "--", "nft", "-f", "/tmp/r.nft"],
+        [
+            "/usr/bin/podman",
+            "unshare",
+            "/usr/bin/nsenter",
+            "-n",
+            "-t",
+            "99",
+            "--",
+            "nft",
+            "-f",
+            "/tmp/r.nft",
+        ],
         input=None,
         text=True,
         capture_output=True,

@@ -58,4 +58,3 @@ class TestAuditLive:
 
         events = list(audit.tail_log(n=10))
         assert events == []
-
