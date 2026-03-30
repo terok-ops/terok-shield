@@ -9,6 +9,7 @@ implementations must satisfy.
 """
 
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -19,6 +20,48 @@ ANNOTATION_STATE_DIR_KEY = "terok.shield.state_dir"
 ANNOTATION_LOOPBACK_PORTS_KEY = "terok.shield.loopback_ports"
 ANNOTATION_VERSION_KEY = "terok.shield.version"
 ANNOTATION_AUDIT_ENABLED_KEY = "terok.shield.audit_enabled"
+ANNOTATION_UPSTREAM_DNS_KEY = "terok.shield.upstream_dns"
+ANNOTATION_DNS_TIER_KEY = "terok.shield.dns_tier"
+
+
+class DnsTier(enum.Enum):
+    """DNS resolution tier for egress control.
+
+    Determines how domain-based allowlists are enforced:
+
+    DNSMASQ: Per-container dnsmasq with ``--nftset`` auto-populates nft
+        allow sets on every DNS query.  Handles IP rotation.
+    DIG: Static resolution at pre-start via ``dig`` (current fallback).
+    GETENT: Single-IP resolution via ``getent hosts`` (minimal fallback).
+    """
+
+    DNSMASQ = "dnsmasq"
+    DIG = "dig"
+    GETENT = "getent"
+
+
+def detect_dns_tier(
+    has: Callable[[str], bool],
+    dnsmasq_nftset_ok: Callable[[], bool] = lambda: True,
+) -> DnsTier:
+    """Detect the best available DNS resolution tier.
+
+    Uses *has* to probe for executables on ``PATH``.  Shared by
+    ``HookMode._detect_dns_tier`` and ``Shield.check_environment``.
+
+    Args:
+        has: Callable that returns True if the named executable exists
+            (e.g. ``CommandRunner.has``).
+        dnsmasq_nftset_ok: Callable that returns True if the installed
+            dnsmasq supports ``--nftset``.  Defaults to ``lambda: True``
+            (skip capability probe); production callers with a live runner
+            should pass :func:`~terok_shield.dnsmasq.has_nftset_support`.
+    """
+    if has("dnsmasq") and dnsmasq_nftset_ok():
+        return DnsTier.DNSMASQ
+    if has("dig"):
+        return DnsTier.DIG
+    return DnsTier.GETENT
 
 
 class ShieldMode(enum.Enum):
@@ -88,8 +131,16 @@ class ShieldModeBackend(Protocol):
         """Live-allow an IP for a running container."""
         ...
 
+    def allow_domain(self, domain: str) -> None:
+        """Live-allow a domain (update dnsmasq config if active)."""
+        ...
+
     def deny_ip(self, container: str, ip: str) -> None:
         """Live-deny an IP for a running container."""
+        ...
+
+    def deny_domain(self, domain: str) -> None:
+        """Live-deny a domain (remove from dnsmasq config if active)."""
         ...
 
     def list_rules(self, container: str) -> str:

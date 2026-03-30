@@ -11,13 +11,19 @@ import pytest
 from terok_shield.state import (
     BUNDLE_VERSION,
     audit_path,
+    denied_domains_path,
     deny_path,
+    dns_tier_path,
+    dnsmasq_conf_path,
+    dnsmasq_pid_path,
     ensure_state_dirs,
     hook_entrypoint,
     hook_json_path,
     hooks_dir,
     live_allowed_path,
+    live_domains_path,
     profile_allowed_path,
+    profile_domains_path,
     read_denied_ips,
     read_effective_ips,
 )
@@ -43,6 +49,14 @@ def test_bundle_version_is_positive_int() -> None:
         pytest.param(live_allowed_path, FAKE_STATE_DIR / "live.allowed", id="live-allowed"),
         pytest.param(deny_path, FAKE_STATE_DIR / "deny.list", id="deny-path"),
         pytest.param(audit_path, FAKE_STATE_DIR / "audit.jsonl", id="audit-path"),
+        pytest.param(
+            profile_domains_path, FAKE_STATE_DIR / "profile.domains", id="profile-domains"
+        ),
+        pytest.param(dnsmasq_conf_path, FAKE_STATE_DIR / "dnsmasq.conf", id="dnsmasq-conf"),
+        pytest.param(dnsmasq_pid_path, FAKE_STATE_DIR / "dnsmasq.pid", id="dnsmasq-pid"),
+        pytest.param(dns_tier_path, FAKE_STATE_DIR / "dns.tier", id="dns-tier"),
+        pytest.param(live_domains_path, FAKE_STATE_DIR / "live.domains", id="live-domains"),
+        pytest.param(denied_domains_path, FAKE_STATE_DIR / "denied.domains", id="denied-domains"),
     ],
 )
 def test_path_derivation_functions(
@@ -129,3 +143,65 @@ def test_read_effective_ips_ignores_denied_entries_not_in_allowed_set(tmp_path: 
     profile_allowed_path(tmp_path).write_text(f"{TEST_IP1}\n")
     deny_path(tmp_path).write_text(f"{TEST_IP3}\n")
     assert read_effective_ips(tmp_path) == [TEST_IP1]
+
+
+# ── hook_entrypoint sync contract ────────────────────────────────────────────
+
+
+def test_hook_entrypoint_bundle_version_matches_state() -> None:
+    """hook_entrypoint._BUNDLE_VERSION must equal state.BUNDLE_VERSION.
+
+    The stdlib-only script cannot import state.py, so it duplicates the
+    constant.  This test is the enforcement mechanism.
+    """
+    from terok_shield.resources import hook_entrypoint as _ep
+
+    assert _ep._BUNDLE_VERSION == BUNDLE_VERSION, (
+        f"hook_entrypoint._BUNDLE_VERSION={_ep._BUNDLE_VERSION!r} "
+        f"!= state.BUNDLE_VERSION={BUNDLE_VERSION!r}. "
+        "Update the duplicate in hook_entrypoint.py."
+    )
+
+
+def test_hook_entrypoint_path_strings_match_state_functions() -> None:
+    """Path-name literals in hook_entrypoint.py must match state path helpers.
+
+    The stdlib-only script uses inline string literals for filenames that
+    state.py derives via path functions.  This test parses the script with
+    ``ast`` to collect only *code* string constants (not comment text), so
+    a rename in state.py triggers a failure here rather than a silent
+    mismatch at runtime.
+    """
+    import ast
+
+    from terok_shield.resources import hook_entrypoint as _ep
+    from terok_shield.state import dnsmasq_conf_path, dnsmasq_pid_path, gateway_path, ruleset_path
+
+    source = Path(_ep.__file__).read_text()
+    tree = ast.parse(source)
+
+    # Collect the AST nodes that are docstrings (Expr wrapping a Constant string
+    # at the start of a module/class/function body) so we can exclude them.
+    docstring_nodes: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                docstring_nodes.add(id(body[0].value))
+
+    literals: set[str] = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstring_nodes
+    }
+    root = Path("x")
+
+    for fn in (ruleset_path, gateway_path, dnsmasq_conf_path, dnsmasq_pid_path):
+        filename = fn(root).name
+        assert filename in literals, (
+            f"hook_entrypoint.py has no code string literal {filename!r} but "
+            f"state.{fn.__name__}() returns that filename. "
+            "Update hook_entrypoint.py to match."
+        )

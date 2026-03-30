@@ -113,6 +113,10 @@ class CommandRunner(Protocol):
         """Resolve domain to both IPv4 and IPv6 addresses."""
         ...
 
+    def getent_hosts(self, domain: str) -> list[str]:
+        """Resolve domain via ``getent hosts`` (fallback when dig is missing)."""
+        ...
+
 
 # ── SubprocessRunner ─────────────────────────────────────
 
@@ -227,6 +231,26 @@ class SubprocessRunner:
             try:
                 _ipaddress.ip_address(addr)
                 result.append(addr)
+            except ValueError:
+                continue
+        return result
+
+    def getent_hosts(self, domain: str) -> list[str]:
+        """Resolve domain via ``getent hosts`` (fallback when dig is missing).
+
+        Returns validated IP addresses from NSS resolution.  Typically
+        returns fewer results than ``dig`` (often a single address).
+        Returns empty list on lookup failure.
+        """
+        out = self.run(["getent", "hosts", domain], check=False, timeout=10)
+        result: list[str] = []
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if not parts:
+                continue
+            try:
+                _ipaddress.ip_address(parts[0])
+                result.append(parts[0])
             except ValueError:
                 continue
         return result

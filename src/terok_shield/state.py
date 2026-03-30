@@ -14,16 +14,22 @@ Bundle layout::
     ├── hooks/
     │   ├── terok-shield-createRuntime.json
     │   └── terok-shield-poststop.json
-    ├── terok-shield-hook              # entrypoint script
+    ├── terok-shield-hook              # entrypoint script (stdlib-only Python)
+    ├── ruleset.nft                    # pre-generated nft ruleset (written by pre_start)
+    ├── gateway                        # discovered gateway IP (written by OCI hook)
     ├── profile.allowed                # IPs from DNS resolution
+    ├── profile.domains                # domain names for dnsmasq config
     ├── live.allowed                   # IPs from allow/deny
     ├── deny.list                      # persistent deny overrides
+    ├── dnsmasq.conf                   # generated dnsmasq configuration
+    ├── dnsmasq.pid                    # dnsmasq PID (in container netns)
+    ├── resolv.conf                    # bind-mounted over /etc/resolv.conf (dnsmasq tier)
     └── audit.jsonl                    # per-container audit log
 """
 
 from pathlib import Path
 
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 3
 """Integer version of the state bundle layout.
 
 Bumped whenever the file layout changes in a backwards-incompatible way.
@@ -64,6 +70,69 @@ def deny_path(state_dir: Path) -> Path:
 def audit_path(state_dir: Path) -> Path:
     """Return the path to the per-container audit log."""
     return state_dir / "audit.jsonl"
+
+
+def profile_domains_path(state_dir: Path) -> Path:
+    """Return the path to the profile domain names list (for dnsmasq config)."""
+    return state_dir / "profile.domains"
+
+
+def dnsmasq_conf_path(state_dir: Path) -> Path:
+    """Return the path to the generated dnsmasq configuration file."""
+    return state_dir / "dnsmasq.conf"
+
+
+def dnsmasq_pid_path(state_dir: Path) -> Path:
+    """Return the path to the dnsmasq PID file."""
+    return state_dir / "dnsmasq.pid"
+
+
+def ruleset_path(state_dir: Path) -> Path:
+    """Return the path to the pre-generated nft ruleset file."""
+    return state_dir / "ruleset.nft"
+
+
+def gateway_path(state_dir: Path) -> Path:
+    """Return the path to the persisted discovered IPv4 gateway IP."""
+    return state_dir / "gateway"
+
+
+def gateway_v6_path(state_dir: Path) -> Path:
+    """Return the path to the persisted discovered IPv6 gateway IP."""
+    return state_dir / "gateway_v6"
+
+
+def upstream_dns_path(state_dir: Path) -> Path:
+    """Return the path to the persisted upstream DNS address."""
+    return state_dir / "upstream.dns"
+
+
+def dns_tier_path(state_dir: Path) -> Path:
+    """Return the path to the persisted DNS tier value."""
+    return state_dir / "dns.tier"
+
+
+def live_domains_path(state_dir: Path) -> Path:
+    """Return the path to the live domain overrides file (from allow_domain)."""
+    return state_dir / "live.domains"
+
+
+def denied_domains_path(state_dir: Path) -> Path:
+    """Return the path to the denied domains file (from deny_domain)."""
+    return state_dir / "denied.domains"
+
+
+def resolv_conf_path(state_dir: Path) -> Path:
+    """Return the path to the pre-written ``resolv.conf`` for the dnsmasq tier.
+
+    ``pre_start()`` writes ``nameserver 127.0.0.1`` here and passes
+    ``--volume {path}:/etc/resolv.conf:ro`` to podman.  Podman detects the
+    user-supplied mount and skips its automatic pasta-generated ``resolv.conf``,
+    so the container's DNS is directed to the per-container dnsmasq instance
+    at ``127.0.0.1:53``.  The read-only mount prevents the container payload
+    from redirecting DNS away from dnsmasq.
+    """
+    return state_dir / "resolv.conf"
 
 
 def read_allowed_ips(state_dir: Path) -> list[str]:

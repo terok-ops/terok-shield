@@ -30,6 +30,12 @@ from .helpers import write_lines
 _MODERN_PODMAN_INFO = json.dumps(
     {"host": {"rootlessNetworkCmd": "pasta"}, "version": {"Version": "5.8.0"}}
 )
+# dnsmasq --version output with nftset support compiled in
+_DNSMASQ_VERSION_NFTSET = (
+    "Dnsmasq version 2.92  Copyright (c) 2000-2025 Simon Kelley\n"
+    "Compile time options: IPv6 GNU-getopt DBus no-UBus i18n IDN2 DHCP DHCPv6 "
+    "no-Lua TFTP conntrack ipset nftset auth DNSSEC loop-detect inotify dumpfile\n"
+)
 
 ConfigFactory = Callable[..., ShieldConfig]
 
@@ -224,7 +230,6 @@ def test_allow_and_deny_use_expected_nft_set(
 ) -> None:
     """allow_ip()/deny_ip() target the correct nft set for each address family."""
     harness = make_hook_mode()
-    harness.ruleset.safe_ip.return_value = ip
 
     getattr(harness.mode, method)("test-ctr", ip)
 
@@ -239,13 +244,42 @@ def test_allow_persists_and_deduplicates_live_allowed(
 ) -> None:
     """allow_ip() persists to live.allowed without duplicate lines."""
     harness = make_hook_mode(config=make_config())
-    harness.ruleset.safe_ip.return_value = TEST_IP1
 
     harness.mode.allow_ip("test-ctr", TEST_IP1)
     harness.mode.allow_ip("test-ctr", TEST_IP1)
 
     lines = state.live_allowed_path(harness.config.state_dir).read_text().splitlines()
     assert lines.count(TEST_IP1) == 1
+
+
+def test_allow_ip_uses_timeout_zero_in_dnsmasq_tier(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """allow_ip() adds 'timeout 0s' when dnsmasq tier is active so the element never expires."""
+    harness = make_hook_mode(config=make_config())
+    sd = harness.config.state_dir.resolve()
+    state.dns_tier_path(sd).write_text("dnsmasq\n")
+
+    harness.mode.allow_ip("test-ctr", TEST_IP1)
+
+    element_arg = harness.runner.nft_via_nsenter.call_args.args[-1]
+    assert "timeout 0s" in element_arg
+
+
+def test_allow_ip_no_timeout_zero_without_dnsmasq_tier(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """allow_ip() omits 'timeout 0s' when dnsmasq tier is not active."""
+    harness = make_hook_mode(config=make_config())
+    sd = harness.config.state_dir.resolve()
+    state.dns_tier_path(sd).write_text("dig\n")
+
+    harness.mode.allow_ip("test-ctr", TEST_IP1)
+
+    element_arg = harness.runner.nft_via_nsenter.call_args.args[-1]
+    assert "timeout 0s" not in element_arg
 
 
 @pytest.mark.parametrize(
@@ -277,7 +311,6 @@ def test_deny_updates_state_files(
     if live_lines:
         write_lines(state.live_allowed_path(harness.config.state_dir), live_lines)
     harness.runner.nft_via_nsenter.side_effect = nft_side_effect
-    harness.ruleset.safe_ip.return_value = TEST_IP1
 
     harness.mode.deny_ip("test-ctr", TEST_IP1)
 
@@ -298,7 +331,6 @@ def test_allow_after_deny_clears_deny_list(
     """allow_ip() removes the IP from deny.list when re-allowing it."""
     harness = make_hook_mode(config=make_config())
     write_lines(state.deny_path(harness.config.state_dir), [TEST_IP1, TEST_IP2])
-    harness.ruleset.safe_ip.return_value = TEST_IP1
 
     harness.mode.allow_ip("test-ctr", TEST_IP1)
     denied = state.read_denied_ips(harness.config.state_dir)
@@ -503,8 +535,9 @@ def test_install_hooks_creates_entrypoint_and_hook_jsons(tmp_path: Path) -> None
 
     assert hook_entrypoint.exists()
     assert hook_entrypoint.stat().st_mode & 0o100
-    assert hook_entrypoint.read_text().startswith("#!/bin/sh\n")
-    assert "terok_shield.oci_hook" in hook_entrypoint.read_text()
+    content = hook_entrypoint.read_text()
+    assert content.splitlines()[0] == "#!/usr/bin/env python3"
+    assert "import terok_shield" not in content
 
     for stage_name in ("createRuntime", "poststop"):
         hook_file = hooks_dir / f"terok-shield-{stage_name}.json"
@@ -513,6 +546,40 @@ def test_install_hooks_creates_entrypoint_and_hook_jsons(tmp_path: Path) -> None
         assert data["version"] == "1.0.0"
         assert data["hook"]["path"] == str(hook_entrypoint)
         assert stage_name in data["stages"]
+
+
+def test_generate_entrypoint_is_stdlib_only(tmp_path: Path) -> None:
+    """The entrypoint script uses /usr/bin/env python3 and has no terok_shield imports."""
+    from terok_shield.mode_hook import _generate_entrypoint
+
+    content = _generate_entrypoint()
+    assert content.splitlines()[0] == "#!/usr/bin/env python3"
+    assert "import terok_shield" not in content
+    assert "ruleset.nft" in content
+
+
+@mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+def test_pre_start_writes_ruleset_nft(
+    _has_hooks: mock.Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() writes ruleset.nft to the state directory before container start."""
+    _set_euid(monkeypatch, 0)
+    config = make_config()
+    harness = make_hook_mode(config=config)
+    harness.runner.run.return_value = _MODERN_PODMAN_INFO
+    harness.profiles.compose_profiles.return_value = []
+
+    harness.mode.pre_start("test", ["dev-standard"])
+
+    ruleset_file = state.ruleset_path(config.state_dir)
+    assert ruleset_file.is_file(), "pre_start() must write ruleset.nft"
+    content = ruleset_file.read_text()
+    assert "terok_shield" in content
+    assert "gateway_v4" in content
+    assert "gateway_v6" in content
 
 
 def test_setup_global_hooks_non_sudo(tmp_path: Path) -> None:
@@ -716,3 +783,398 @@ def test_shield_down_on_inactive_applies_without_delete(
     # On an empty netns there is nothing to delete — no call should contain "delete table"
     for call in harness.runner.nft_via_nsenter.call_args_list:
         assert "delete" not in call.kwargs.get("stdin", "")
+
+
+# ── allow_domain / deny_domain ────────────────────────────
+
+
+class TestDomainOperations:
+    """Tests for allow_domain, deny_domain, and dnsmasq reload."""
+
+    def test_allow_domain_persists_and_reloads(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """allow_domain() writes domain to live.domains and sends SIGHUP."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        # Write upstream.dns so reload works
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        # Write a dnsmasq PID file so reload triggers
+        state.dnsmasq_pid_path(sd).write_text("12345\n")
+
+        with (
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
+            mock.patch("terok_shield.dnsmasq.os.kill"),
+        ):
+            harness.mode.allow_domain(TEST_DOMAIN)
+
+        domains = state.live_domains_path(sd).read_text()
+        assert TEST_DOMAIN in domains
+
+    def test_allow_domain_skips_duplicate(self, make_hook_mode: HookModeHarnessFactory) -> None:
+        """allow_domain() is a no-op for already-present domains."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.profile_domains_path(sd).write_text(f"{TEST_DOMAIN}\n")
+
+        with mock.patch("terok_shield.dnsmasq.reload") as mock_reload:
+            harness.mode.allow_domain(TEST_DOMAIN)
+        mock_reload.assert_not_called()
+
+    def test_deny_domain_removes_and_reloads(self, make_hook_mode: HookModeHarnessFactory) -> None:
+        """deny_domain() adds domain to denied.domains and reloads."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.profile_domains_path(sd).write_text(f"{TEST_DOMAIN}\n")
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        state.dnsmasq_pid_path(sd).write_text("12345\n")
+
+        with (
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
+            mock.patch("terok_shield.dnsmasq.os.kill"),
+        ):
+            harness.mode.deny_domain(TEST_DOMAIN)
+
+        # Domain is in denied.domains, excluded from merged set
+        from terok_shield.dnsmasq import read_merged_domains
+
+        denied = state.denied_domains_path(sd).read_text()
+        assert TEST_DOMAIN in denied
+        assert TEST_DOMAIN not in read_merged_domains(sd)
+
+    def test_reload_raises_without_upstream_dns(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """_reload_dnsmasq() raises when upstream DNS is not persisted."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+
+        with pytest.raises(RuntimeError, match="upstream DNS not persisted"):
+            harness.mode._reload_dnsmasq(sd)
+
+    @pytest.mark.parametrize(
+        ("method_name", "tier"),
+        [
+            pytest.param("allow_domain", "dig", id="allow-dig"),
+            pytest.param("allow_domain", "getent", id="allow-getent"),
+            pytest.param("deny_domain", "dig", id="deny-dig"),
+            pytest.param("deny_domain", "getent", id="deny-getent"),
+        ],
+    )
+    def test_domain_method_is_noop_for_non_dnsmasq_tier(
+        self, method_name: str, tier: str, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """allow_domain() and deny_domain() are silent no-ops when the active tier is not dnsmasq.
+
+        The static IP-level allow/deny already ran via allow_ip()/deny_ip(); the
+        domain-tracking step is dnsmasq-specific and simply skipped on dig/getent tiers.
+        """
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.dns_tier_path(sd).write_text(f"{tier}\n")
+
+        # Must not raise
+        getattr(harness.mode, method_name)(TEST_DOMAIN)
+        # And must not have written any domain state files
+        assert not state.live_domains_path(sd).exists()
+
+    def test_allow_domain_passes_when_tier_absent(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """allow_domain() proceeds normally when dns_tier file does not exist (pre_start not run)."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        state.dnsmasq_pid_path(sd).write_text("12345\n")
+        # dns_tier_path NOT written — pre_start has not run
+
+        with (
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
+            mock.patch("terok_shield.dnsmasq.os.kill"),
+        ):
+            harness.mode.allow_domain(TEST_DOMAIN)
+
+        domains = state.live_domains_path(sd).read_text()
+        assert TEST_DOMAIN in domains
+
+
+class TestPreStartDnsTierBranches:
+    """pre_start() DNS tier branching — dnsmasq vs dig/getent code paths."""
+
+    @mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+    def test_pre_start_dig_tier_resolves_all_entries(
+        self,
+        _has_hooks: mock.Mock,
+        monkeypatch: pytest.MonkeyPatch,
+        make_hook_mode: HookModeHarnessFactory,
+    ) -> None:
+        """When tier is DIG, pre_start resolves all entries (domains + IPs) to cache."""
+        _set_euid(monkeypatch, 0)
+        harness = make_hook_mode()
+        harness.runner.run.return_value = _MODERN_PODMAN_INFO
+        # Mock has() to return False for dnsmasq, True for dig
+        harness.runner.has.side_effect = lambda name: name != "dnsmasq"
+        harness.profiles.compose_profiles.return_value = [TEST_DOMAIN, TEST_IP1]
+
+        args = harness.mode.pre_start("test", ["dev-standard"])
+
+        # dig tier: resolve_and_cache called with ALL entries (domains + IPs)
+        harness.dns.resolve_and_cache.assert_called_once()
+        call_entries = harness.dns.resolve_and_cache.call_args[0][0]
+        assert TEST_DOMAIN in call_entries
+        assert TEST_IP1 in call_entries
+        # No --dns flag for dig tier
+        assert "--dns" not in args
+
+    @mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+    def test_pre_start_dnsmasq_tier_splits_domains_and_ips(
+        self,
+        _has_hooks: mock.Mock,
+        monkeypatch: pytest.MonkeyPatch,
+        make_hook_mode: HookModeHarnessFactory,
+    ) -> None:
+        """When tier is DNSMASQ, pre_start splits entries: domains to file, IPs to cache."""
+        _set_euid(monkeypatch, 0)
+        harness = make_hook_mode()
+        harness.runner.run.side_effect = lambda cmd, **_kw: (
+            _DNSMASQ_VERSION_NFTSET if cmd[0] == "dnsmasq" else _MODERN_PODMAN_INFO
+        )
+        harness.runner.has.return_value = True  # dnsmasq available (nftset probed via run)
+        harness.profiles.compose_profiles.return_value = [TEST_DOMAIN, TEST_IP1]
+
+        args = harness.mode.pre_start("test", ["dev-standard"])
+
+        # dnsmasq tier: resolve_and_cache called with raw IPs only
+        harness.dns.resolve_and_cache.assert_called_once()
+        call_entries = harness.dns.resolve_and_cache.call_args[0][0]
+        assert TEST_IP1 in call_entries
+        assert TEST_DOMAIN not in call_entries
+        # Domains written to profile.domains
+        sd = harness.config.state_dir.resolve()
+        domains_content = state.profile_domains_path(sd).read_text()
+        assert TEST_DOMAIN in domains_content
+        # No --dns flag (triggers pasta to bind host port 53, fails rootless).
+        # Instead, resolv.conf is pre-written and bind-mounted :ro via --volume.
+        assert "--dns" not in args
+        assert "--volume" in args
+        volume_args = [args[i + 1] for i, a in enumerate(args) if a == "--volume"]
+        assert any("/etc/resolv.conf:ro,Z" in v for v in volume_args)
+        # The resolv.conf source file exists and points to dnsmasq
+        sd = harness.config.state_dir.resolve()
+        resolv = state.resolv_conf_path(sd)
+        assert resolv.is_file()
+        assert "127.0.0.1" in resolv.read_text()
+
+    @mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+    def test_pre_start_getent_tier_resolves_all_entries(
+        self,
+        _has_hooks: mock.Mock,
+        monkeypatch: pytest.MonkeyPatch,
+        make_hook_mode: HookModeHarnessFactory,
+    ) -> None:
+        """When tier is GETENT (no dnsmasq, no dig), pre_start still resolves all entries."""
+        _set_euid(monkeypatch, 0)
+        harness = make_hook_mode()
+        harness.runner.run.return_value = _MODERN_PODMAN_INFO
+        harness.runner.has.return_value = False  # nothing available
+        harness.profiles.compose_profiles.return_value = [TEST_DOMAIN]
+
+        args = harness.mode.pre_start("test", ["dev-standard"])
+
+        harness.dns.resolve_and_cache.assert_called_once()
+        assert "--dns" not in args
+
+
+class TestDenyDomainWithReload:
+    """deny_domain() removes domain and triggers dnsmasq reload."""
+
+    def test_deny_domain_triggers_reload(self, make_hook_mode: HookModeHarnessFactory) -> None:
+        """deny_domain() removes domain from live.domains and reloads dnsmasq."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.live_domains_path(sd).write_text(f"{TEST_DOMAIN}\n")
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        state.dnsmasq_pid_path(sd).write_text("12345\n")
+
+        with (
+            mock.patch("terok_shield.dnsmasq._is_our_dnsmasq", return_value=True),
+            mock.patch("terok_shield.dnsmasq.os.kill"),
+        ):
+            harness.mode.deny_domain(TEST_DOMAIN)
+
+        denied = state.denied_domains_path(sd).read_text()
+        assert TEST_DOMAIN in denied
+
+    def test_deny_domain_noop_when_not_present(
+        self, make_hook_mode: HookModeHarnessFactory
+    ) -> None:
+        """deny_domain() is a no-op when the domain is not in any domain file."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+
+        with mock.patch("terok_shield.dnsmasq.reload") as mock_reload:
+            harness.mode.deny_domain(TEST_DOMAIN)
+        mock_reload.assert_not_called()
+
+
+class TestContainerRulesetDnsTier:
+    """_container_ruleset() uses persisted DNS tier for set_timeout."""
+
+    def test_dnsmasq_tier_enables_set_timeout(self, make_hook_mode: HookModeHarnessFactory) -> None:
+        """When dns.tier is 'dnsmasq', RulesetBuilder gets set_timeout."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        state.dns_tier_path(sd).write_text("dnsmasq\n")
+
+        harness.runner.podman_inspect.return_value = "42"
+        harness.runner.run.side_effect = [
+            "nameserver 127.0.0.1\n",  # podman unshare cat resolv.conf
+            "",  # podman unshare cat /proc/.../route
+        ]
+
+        ruleset = harness.mode._container_ruleset("test-ctr")
+        assert ruleset._set_timeout == "30m"
+
+    def test_dig_tier_no_set_timeout(self, make_hook_mode: HookModeHarnessFactory) -> None:
+        """When dns.tier is 'dig', RulesetBuilder has no timeout."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+        state.upstream_dns_path(sd).write_text("169.254.1.1\n")
+        state.dns_tier_path(sd).write_text("dig\n")
+
+        harness.runner.podman_inspect.return_value = "42"
+        harness.runner.run.side_effect = [
+            "nameserver 169.254.1.1\n",
+            "",
+        ]
+
+        ruleset = harness.mode._container_ruleset("test-ctr")
+        assert ruleset._set_timeout == ""
+
+    def test_no_tier_file_no_timeout(self, make_hook_mode: HookModeHarnessFactory) -> None:
+        """When dns.tier file is absent, no timeout (backward compat)."""
+        harness = make_hook_mode()
+        sd = harness.config.state_dir.resolve()
+        state.ensure_state_dirs(sd)
+
+        harness.runner.podman_inspect.return_value = "42"
+        harness.runner.run.side_effect = [
+            "nameserver 169.254.1.1\n",
+            "",
+        ]
+
+        ruleset = harness.mode._container_ruleset("test-ctr")
+        assert ruleset._set_timeout == ""
+
+
+# ── Additional coverage tests ─────────────────────────────
+
+
+def test_upstream_dns_for_mode_raises_on_unknown_mode() -> None:
+    """_upstream_dns_for_mode() raises ValueError for unrecognised network modes."""
+    from terok_shield.mode_hook import _upstream_dns_for_mode
+
+    with pytest.raises(ValueError, match="Cannot determine upstream DNS"):
+        _upstream_dns_for_mode("bridge")
+
+
+@mock.patch("terok_shield.mode_hook.has_global_hooks", return_value=True)
+def test_pre_start_includes_hooks_dir_when_persists(
+    _has_hooks: mock.Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """pre_start() adds --hooks-dir when info.hooks_dir_persists is True."""
+    _set_euid(monkeypatch, 1000)
+    harness = make_hook_mode(config=make_config())
+    # Podman version 99.0.0 triggers hooks_dir_persists = True
+    harness.runner.run.return_value = json.dumps(
+        {"host": {"rootlessNetworkCmd": "pasta"}, "version": {"Version": "99.0.0"}}
+    )
+    harness.profiles.compose_profiles.return_value = []
+
+    args = harness.mode.pre_start("test", ["dev-standard"])
+
+    assert "--hooks-dir" in args
+
+
+def test_shield_state_returns_down_all(make_hook_mode: HookModeHarnessFactory) -> None:
+    """shield_state() returns DOWN_ALL when allow-all bypass is active but not simple bypass."""
+    harness = make_hook_mode()
+    harness.runner.nft_via_nsenter.return_value = "some rules"
+    # First call (allow_all=False): non-empty errors → not DOWN, continue
+    # Second call (allow_all=True): empty list → DOWN_ALL
+    harness.ruleset.verify_bypass.side_effect = [["not bypass"], []]
+
+    assert harness.mode.shield_state("test-ctr") == ShieldState.DOWN_ALL
+
+
+def test_shield_up_repopulates_gateway_v4_from_file(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """shield_up() re-adds the persisted IPv4 gateway to the nft gateway_v4 set."""
+    harness = make_hook_mode(config=make_config())
+    sd = harness.config.state_dir
+    state.gateway_path(sd).write_text("10.0.2.2\n")
+
+    harness.mode._container_ruleset = lambda _c: harness.ruleset
+    harness.runner.nft_via_nsenter.side_effect = [
+        "table inet terok_shield {}",  # shield_state() → UP
+        "",  # apply ruleset
+        "",  # add gateway element
+        "valid output",  # verify
+    ]
+    harness.ruleset.build_hook.return_value = "hook ruleset"
+    harness.ruleset.verify_hook.return_value = []
+    harness.ruleset.add_elements_dual.return_value = ""
+    harness.ruleset.verify_bypass.return_value = ["not bypass"]
+
+    harness.mode.shield_up("test-ctr")
+
+    gateway_calls = [
+        call for call in harness.runner.nft_via_nsenter.call_args_list if "gateway_v4" in call.args
+    ]
+    assert gateway_calls, "Expected nft call to add gateway_v4 element"
+    assert any("{ 10.0.2.2 }" in str(c) for c in gateway_calls)
+
+
+def test_shield_up_repopulates_gateway_v6_from_file(
+    make_hook_mode: HookModeHarnessFactory,
+    make_config: ConfigFactory,
+) -> None:
+    """shield_up() re-adds the persisted IPv6 gateway to the nft gateway_v6 set."""
+    harness = make_hook_mode(config=make_config())
+    sd = harness.config.state_dir
+    state.gateway_v6_path(sd).write_text("fd00::1\n")
+
+    harness.mode._container_ruleset = lambda _c: harness.ruleset
+    harness.runner.nft_via_nsenter.side_effect = [
+        "table inet terok_shield {}",  # shield_state() → UP
+        "",  # apply ruleset
+        "",  # add gateway element
+        "valid output",  # verify
+    ]
+    harness.ruleset.build_hook.return_value = "hook ruleset"
+    harness.ruleset.verify_hook.return_value = []
+    harness.ruleset.add_elements_dual.return_value = ""
+    harness.ruleset.verify_bypass.return_value = ["not bypass"]
+
+    harness.mode.shield_up("test-ctr")
+
+    gateway_calls = [
+        call for call in harness.runner.nft_via_nsenter.call_args_list if "gateway_v6" in call.args
+    ]
+    assert gateway_calls, "Expected nft call to add gateway_v6 element"

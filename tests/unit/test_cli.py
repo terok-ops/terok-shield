@@ -1025,7 +1025,7 @@ def test_check_environment_command(
         from terok_shield import EnvironmentCheck
 
         mock_check.return_value = EnvironmentCheck(
-            ok=True, podman_version=(5, 8, 0), hooks="per-container", health="ok"
+            dns_tier="dig", ok=True, podman_version=(5, 8, 0), hooks="per-container", health="ok"
         )
         main(["check-environment"])
     out = capsys.readouterr().out

@@ -12,23 +12,15 @@ The primary entry point is the ``Shield`` facade class:
     >>> shield.pre_start("my-container", ["dev-standard"])
 """
 
+import logging
 from collections.abc import Iterator
+from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version as _meta_version
 from pathlib import Path
 
-__version__: str = "0.0.0"  # placeholder; replaced at build time
-
-from importlib.metadata import PackageNotFoundError, version as _meta_version
-
-try:
-    __version__ = _meta_version("terok-shield")
-except PackageNotFoundError:
-    pass  # editable install or running from source without metadata
-
-from dataclasses import dataclass, field
-
-from . import state
+from . import dnsmasq, state
 from .audit import AuditLogger
-from .config import ShieldConfig, ShieldMode, ShieldState
+from .config import DnsTier, ShieldConfig, ShieldMode, ShieldState, detect_dns_tier
 from .dns import DnsResolver
 from .mode_hook import setup_global_hooks
 from .nft import RulesetBuilder
@@ -52,6 +44,14 @@ from .run import (
 )
 from .util import is_ip as _is_ip
 
+logger = logging.getLogger(__name__)
+
+__version__: str = "0.0.0"  # placeholder; replaced at build time
+try:
+    __version__ = _meta_version("terok-shield")
+except PackageNotFoundError:
+    pass  # editable install or running from source without metadata
+
 
 @dataclass(frozen=True)
 class EnvironmentCheck:
@@ -66,11 +66,13 @@ class EnvironmentCheck:
         hooks: Hook installation type (``per-container``, ``global-system``,
             ``global-user``, ``not-installed``).
         health: Environment health (``ok``, ``setup-needed``, ``stale-hooks``).
+        dns_tier: Active DNS resolution tier (``dnsmasq``, ``dig``, ``getent``).
         issues: List of human-readable issue descriptions.
         needs_setup: True if one-time setup is required.
         setup_hint: Setup instructions (empty if not needed).
     """
 
+    dns_tier: str = ""
     ok: bool = True
     podman_version: tuple[int, ...] = (0,)
     hooks: str = "per-container"
@@ -156,10 +158,18 @@ class Shield:
         hooks = "per-container"
         health = "ok"
 
-        if not self.runner.has("dig"):
+        tier = detect_dns_tier(self.runner.has, lambda: dnsmasq.has_nftset_support(self.runner))
+        dns_tier = tier.value
+        if tier == DnsTier.DIG:
             issues.append(
-                "dig not found — DNS resolution will fail. "
-                "Install: dnsutils (Debian/Ubuntu) or bind-utils (Fedora/RHEL)"
+                "dnsmasq not found — domain allowlisting uses static pre-start "
+                "resolution (no IP rotation handling). "
+                "Install dnsmasq for dynamic domain-based egress control"
+            )
+        elif tier == DnsTier.GETENT:
+            issues.append(
+                "Neither dnsmasq nor dig found — DNS resolution uses getent "
+                "(single IP, no AAAA). Install dnsmasq or at minimum dnsutils/bind-utils"
             )
 
         hooks_dirs = find_hooks_dirs()
@@ -190,6 +200,7 @@ class Shield:
             podman_version=info.version,
             hooks=hooks,
             health=health,
+            dns_tier=dns_tier,
             issues=issues,
             needs_setup=needs_setup,
             setup_hint=setup_hint,
@@ -213,28 +224,38 @@ class Shield:
 
     def allow(self, container: str, target: str) -> list[str]:
         """Live-allow a domain or IP for a running container."""
-        ips = [target] if _is_ip(target) else self.dns.resolve_domains([target])
+        is_domain = not _is_ip(target)
+        ips = [target] if not is_domain else self.dns.resolve_domains([target])
         allowed: list[str] = []
         for ip in ips:
             try:
                 self._mode.allow_ip(container, ip)
-            except (ExecError, OSError):
+            except (ExecError, OSError) as exc:
+                logger.warning("allow_ip failed for %s on %s: %s", ip, container, exc)
                 continue
             allowed.append(ip)
             self.audit.log_event(container, "allowed", dest=ip, detail=f"target={target}")
+        # Update dnsmasq config for domain targets (so future IP rotations are captured)
+        if is_domain and allowed:
+            self._mode.allow_domain(target)
         return allowed
 
     def deny(self, container: str, target: str) -> list[str]:
         """Live-deny a domain or IP for a running container."""
-        ips = [target] if _is_ip(target) else self.dns.resolve_domains([target])
+        is_domain = not _is_ip(target)
+        ips = [target] if not is_domain else self.dns.resolve_domains([target])
         denied: list[str] = []
         for ip in ips:
             try:
                 self._mode.deny_ip(container, ip)
-            except (ExecError, OSError):
+            except (ExecError, OSError) as exc:
+                logger.warning("deny_ip failed for %s on %s: %s", ip, container, exc)
                 continue
             denied.append(ip)
             self.audit.log_event(container, "denied", dest=ip, detail=f"target={target}")
+        # Remove domain from dnsmasq config (stops future auto-population)
+        if is_domain and denied:
+            self._mode.deny_domain(target)
         return denied
 
     def rules(self, container: str) -> str:
@@ -302,6 +323,7 @@ __all__ = [
     "CommandRunner",
     "DigNotFoundError",
     "DnsResolver",
+    "DnsTier",
     "EnvironmentCheck",
     "ExecError",
     "NftNotFoundError",

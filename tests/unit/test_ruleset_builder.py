@@ -118,31 +118,39 @@ class TestRulesetBuilderVerify:
         assert len(errors) > 0
 
 
-class TestRulesetBuilderStaticMethods:
-    """Test RulesetBuilder static methods."""
-
-    def test_safe_ip_valid(self) -> None:
-        """safe_ip accepts valid IP."""
-        assert RulesetBuilder.safe_ip(TEST_IP1) == TEST_IP1
-
-    def test_safe_ip_invalid(self) -> None:
-        """safe_ip rejects invalid input."""
-        with pytest.raises(ValueError):
-            RulesetBuilder.safe_ip("evil.com")
+class TestRulesetBuilderAddElementsDual:
+    """Test RulesetBuilder.add_elements_dual()."""
 
     def test_add_elements_dual_v4_only(self) -> None:
         """add_elements_dual with IPv4 only."""
-        result = RulesetBuilder.add_elements_dual([TEST_IP1, TEST_IP2])
+        result = RulesetBuilder().add_elements_dual([TEST_IP1, TEST_IP2])
         assert "allow_v4" in result
         assert "allow_v6" not in result
 
     def test_add_elements_dual_mixed(self) -> None:
         """add_elements_dual with mixed IPs."""
-        result = RulesetBuilder.add_elements_dual([TEST_IP1, IPV6_CLOUDFLARE])
+        result = RulesetBuilder().add_elements_dual([TEST_IP1, IPV6_CLOUDFLARE])
         assert "allow_v4" in result
         assert "allow_v6" in result
 
     def test_add_elements_dual_empty(self) -> None:
         """add_elements_dual with empty list."""
-        result = RulesetBuilder.add_elements_dual([])
+        result = RulesetBuilder().add_elements_dual([])
         assert result == ""
+
+    def test_add_elements_dual_without_timeout_has_no_timeout_zero(self) -> None:
+        """add_elements_dual on a builder without set_timeout emits plain IPs."""
+        builder = RulesetBuilder()  # no set_timeout
+        result = builder.add_elements_dual([TEST_IP1])
+        assert "timeout 0s" not in result
+        assert TEST_IP1 in result
+
+    def test_add_elements_dual_with_set_timeout_adds_timeout_zero(self) -> None:
+        """add_elements_dual on a dnsmasq-tier builder emits 'timeout 0s' per element.
+
+        Permanent IPs must not expire with the 30-minute set default timeout
+        that dnsmasq-learned entries use.
+        """
+        builder = RulesetBuilder(set_timeout="30m")
+        result = builder.add_elements_dual([TEST_IP1])
+        assert f"{TEST_IP1} timeout 0s" in result

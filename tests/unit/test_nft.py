@@ -14,6 +14,7 @@ from collections.abc import Callable
 import pytest
 
 from terok_shield.nft import (
+    _safe_timeout,
     add_elements,
     add_elements_dual,
     bypass_ruleset,
@@ -26,7 +27,6 @@ from terok_shield.nft_constants import (
     BYPASS_LOG_PREFIX,
     IPV6_PRIVATE,
     NFT_TABLE,
-    PASTA_DNS,
     PRIVATE_RANGES,
     RFC1918,
 )
@@ -40,7 +40,6 @@ from ..testnet import (
     IPV6_VERBOSE_CANONICAL,
     LINK_LOCAL_DNS,
     SLIRP4NETNS_DNS,
-    SLIRP4NETNS_GATEWAY,
     TEST_DOMAIN,
     TEST_IP1,
     TEST_IP2,
@@ -141,25 +140,11 @@ def test_hook_ruleset_contains_required_fragments(fragment: str) -> None:
     assert fragment in hook_ruleset()
 
 
-@pytest.mark.parametrize(
-    "private_net",
-    [pytest.param(net, id=f"rfc1918-{index}") for index, net in enumerate(RFC1918, start=1)],
-)
-def test_hook_ruleset_blocks_each_rfc1918_range(private_net: str) -> None:
-    """Every IPv4 private/link-local range must be rejected in enforce mode."""
-    assert private_net in hook_ruleset()
-
-
-@pytest.mark.parametrize(
-    "private_net",
-    [
-        pytest.param(net, id=f"ipv6-private-{index}")
-        for index, net in enumerate(IPV6_PRIVATE, start=1)
-    ],
-)
-def test_hook_ruleset_blocks_each_ipv6_private_range(private_net: str) -> None:
-    """Every IPv6 private/link-local range must be rejected in enforce mode."""
-    assert private_net in hook_ruleset()
+def test_hook_ruleset_blocks_all_private_ranges() -> None:
+    """Every RFC1918 and IPv6 private/link-local range must be rejected in enforce mode."""
+    rs = hook_ruleset()
+    for net in PRIVATE_RANGES:
+        assert net in rs, f"Private range {net!r} missing from hook ruleset"
 
 
 def test_hook_ruleset_accepts_dns_to_the_configured_forwarder() -> None:
@@ -446,28 +431,18 @@ def test_bypass_ruleset_contains_required_fragments(fragment: str) -> None:
     assert fragment in bypass_ruleset()
 
 
-@pytest.mark.parametrize(
-    "private_net",
-    [
-        pytest.param(net, id=f"private-range-{index}")
-        for index, net in enumerate(PRIVATE_RANGES, start=1)
-    ],
-)
-def test_bypass_ruleset_blocks_private_ranges_by_default(private_net: str) -> None:
-    """Bypass mode still rejects private-range traffic unless allow_all=True."""
-    assert private_net in bypass_ruleset()
+def test_bypass_ruleset_blocks_all_private_ranges_by_default() -> None:
+    """Bypass mode still rejects all private-range traffic unless allow_all=True."""
+    rs = bypass_ruleset()
+    for net in PRIVATE_RANGES:
+        assert net in rs, f"Private range {net!r} missing from bypass ruleset"
 
 
-@pytest.mark.parametrize(
-    "private_net",
-    [
-        pytest.param(net, id=f"allow-all-omits-private-range-{index}")
-        for index, net in enumerate(PRIVATE_RANGES, start=1)
-    ],
-)
-def test_bypass_ruleset_allow_all_removes_private_range_rejects(private_net: str) -> None:
-    """allow_all=True removes both IPv4 and IPv6 private-range reject rules."""
-    assert private_net not in bypass_ruleset(allow_all=True)
+def test_bypass_ruleset_allow_all_removes_all_private_range_rejects() -> None:
+    """allow_all=True removes every RFC1918 and IPv6 private-range reject rule."""
+    rs = bypass_ruleset(allow_all=True)
+    for net in PRIVATE_RANGES:
+        assert net not in rs, f"Private range {net!r} should be absent when allow_all=True"
 
 
 def test_bypass_ruleset_does_not_include_the_enforce_deny_rule() -> None:
@@ -583,53 +558,116 @@ def test_verify_bypass_ruleset_reports_errors_for_empty_input() -> None:
     assert verify_bypass_ruleset("")
 
 
-# ── Gateway port rules ───────────────────────────────────
+# ── Gateway sets and port rules ──────────────────────────
 
 
 class TestGatewayPortRules:
-    """Tests for slirp4netns gateway + loopback port exceptions."""
+    """Tests for dynamic gateway sets (gateway_v4/gateway_v6) and loopback port rules."""
 
-    def test_hook_ruleset_includes_gateway_rule(self) -> None:
-        """hook_ruleset() with gateway adds accept rule before private-range block."""
-        rs = hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=(9418,), gateway=SLIRP4NETNS_GATEWAY)
-        # Gateway rule must appear before the private-range reject
-        gw_pos = rs.index(f"daddr {SLIRP4NETNS_GATEWAY} accept")
-        private_pos = rs.index(RFC1918[0])
-        assert gw_pos < private_pos
+    def test_hook_ruleset_always_defines_gateway_sets(self) -> None:
+        """hook_ruleset() always includes gateway_v4 and gateway_v6 set declarations."""
+        rs = hook_ruleset()
+        assert "set gateway_v4 { type ipv4_addr; }" in rs
+        assert "set gateway_v6 { type ipv6_addr; }" in rs
 
-    def test_hook_ruleset_no_gateway_no_rule(self) -> None:
-        """hook_ruleset() without gateway has no gateway rule."""
-        rs = hook_ruleset(dns=PASTA_DNS, loopback_ports=(9418,))
-        assert f"daddr {SLIRP4NETNS_GATEWAY}" not in rs
+    def test_bypass_ruleset_always_defines_gateway_sets(self) -> None:
+        """bypass_ruleset() always includes gateway_v4 and gateway_v6 set declarations."""
+        rs = bypass_ruleset()
+        assert "set gateway_v4 { type ipv4_addr; }" in rs
+        assert "set gateway_v6 { type ipv6_addr; }" in rs
 
-    def test_bypass_ruleset_includes_gateway_rule_before_private_range(self) -> None:
-        """bypass_ruleset() with gateway adds accept rule before private-range block."""
-        rs = bypass_ruleset(
-            dns=SLIRP4NETNS_DNS, loopback_ports=(9418,), gateway=SLIRP4NETNS_GATEWAY
-        )
-        gw_pos = rs.index(f"daddr {SLIRP4NETNS_GATEWAY} accept")
+    def test_gateway_port_rules_reference_sets(self) -> None:
+        """hook_ruleset() with loopback_ports generates rules referencing @gateway_v4/@gateway_v6."""
+        rs = hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=(9418,))
+        assert "tcp dport 9418 ip daddr @gateway_v4 accept" in rs
+        assert "tcp dport 9418 ip6 daddr @gateway_v6 accept" in rs
+
+    def test_gateway_rules_before_private_range(self) -> None:
+        """Gateway accept rules appear before private-range reject rules."""
+        rs = hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=(9418,))
+        gw_pos = rs.index("@gateway_v4 accept")
         private_pos = rs.index(RFC1918[0])
         assert gw_pos < private_pos
 
     def test_gateway_multiple_ports(self) -> None:
-        """Gateway rule generated for each loopback port."""
-        rs = hook_ruleset(
-            dns=SLIRP4NETNS_DNS, loopback_ports=(9418, 8080), gateway=SLIRP4NETNS_GATEWAY
-        )
-        assert f"tcp dport 9418 ip daddr {SLIRP4NETNS_GATEWAY} accept" in rs
-        assert f"tcp dport 8080 ip daddr {SLIRP4NETNS_GATEWAY} accept" in rs
+        """Both @gateway_v4 and @gateway_v6 rules are generated for each loopback port."""
+        rs = hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=(9418, 8080))
+        assert "tcp dport 9418 ip daddr @gateway_v4 accept" in rs
+        assert "tcp dport 8080 ip daddr @gateway_v4 accept" in rs
+        assert "tcp dport 9418 ip6 daddr @gateway_v6 accept" in rs
+        assert "tcp dport 8080 ip6 daddr @gateway_v6 accept" in rs
 
-    def test_gateway_empty_ports_no_rule(self) -> None:
-        """Gateway with no loopback ports produces no rule."""
-        rs = hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=(), gateway=SLIRP4NETNS_GATEWAY)
-        assert f"daddr {SLIRP4NETNS_GATEWAY}" not in rs
+    def test_no_gateway_rules_without_ports(self) -> None:
+        """hook_ruleset() with no loopback_ports produces no @gateway_v4/@gateway_v6 rules."""
+        rs = hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=())
+        assert "@gateway_v4 accept" not in rs
+        assert "@gateway_v6 accept" not in rs
 
-    def test_gateway_validated(self) -> None:
-        """Invalid gateway IP is rejected."""
-        with pytest.raises(ValueError, match="Invalid"):
-            hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=(9418,), gateway="not-an-ip")
 
-    def test_gateway_rejects_cidr(self) -> None:
-        """CIDR network as gateway is rejected (must be a single host)."""
-        with pytest.raises(ValueError, match="network"):
-            hook_ruleset(dns=SLIRP4NETNS_DNS, loopback_ports=(9418,), gateway="10.0.2.0/24")
+# ── _safe_timeout validation ─────────────────────────────
+
+
+class TestSafeTimeout:
+    """Security boundary: timeout validation prevents nft injection."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("30m", id="minutes"),
+            pytest.param("1h", id="hours"),
+            pytest.param("60s", id="seconds"),
+            pytest.param("7d", id="days"),
+        ],
+    )
+    def test_accepts_valid_timeout(self, value: str) -> None:
+        """Valid nft timeout values are accepted."""
+        assert _safe_timeout(value) == value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("30", id="no-unit"),
+            pytest.param("m30", id="unit-first"),
+            pytest.param("30x", id="invalid-unit"),
+            pytest.param("30m; drop", id="injection"),
+            pytest.param("-1m", id="negative"),
+        ],
+    )
+    def test_rejects_invalid_timeout(self, value: str) -> None:
+        """Invalid timeout values are rejected."""
+        with pytest.raises(ValueError, match="Invalid nft timeout"):
+            _safe_timeout(value)
+
+
+# ── set_timeout in rulesets ──────────────────────────────
+
+
+class TestSetTimeout:
+    """nft set declarations with optional timeout for dnsmasq mode."""
+
+    def test_hook_ruleset_without_timeout(self) -> None:
+        """Default rulesets have no timeout in set declarations."""
+        rs = hook_ruleset()
+        assert "flags interval;" in rs
+        assert "timeout" not in rs
+
+    def test_hook_ruleset_with_timeout(self) -> None:
+        """With set_timeout, sets get interval+timeout flags."""
+        rs = hook_ruleset(set_timeout="30m")
+        assert "flags interval, timeout; timeout 30m;" in rs
+
+    def test_bypass_ruleset_with_timeout(self) -> None:
+        """Bypass rulesets also support set_timeout."""
+        rs = bypass_ruleset(set_timeout="1h")
+        assert "flags interval, timeout; timeout 1h;" in rs
+
+    def test_hook_ruleset_rejects_invalid_timeout(self) -> None:
+        """Invalid timeout in hook_ruleset is rejected."""
+        with pytest.raises(ValueError):
+            hook_ruleset(set_timeout="bad")
+
+    def test_bypass_ruleset_rejects_invalid_timeout(self) -> None:
+        """Invalid timeout in bypass_ruleset is rejected by _safe_timeout."""
+        with pytest.raises(ValueError):
+            bypass_ruleset(set_timeout="bad")
