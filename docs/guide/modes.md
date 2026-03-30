@@ -26,9 +26,17 @@ own network namespace.
 ### How it works
 
 1. `Shield.pre_start()` installs hooks into the container's state directory,
-   resolves DNS, writes `profile.allowed`, pre-generates the complete nft ruleset
-   to `ruleset.nft`, and returns podman args with OCI annotations (`state_dir`,
-   `loopback_ports`, `version`, `upstream_dns`, `dns_tier`)
+   processes the allowlist profiles, and pre-generates the complete nft ruleset
+   to `ruleset.nft`. DNS handling differs by tier:
+   - **dnsmasq tier**: domain names are written to `profile.domains` for dnsmasq
+     `--nftset` runtime resolution; only raw IP entries are resolved and written
+     to `profile.allowed`. dnsmasq populates the nft allow sets at runtime as
+     the container makes DNS queries.
+   - **dig / getent tier**: all entries (domains and raw IPs) are resolved to IPs
+     at pre-start time and written to `profile.allowed`; no runtime resolution.
+
+   Returns podman args with OCI annotations (`state_dir`, `loopback_ports`,
+   `version`, `upstream_dns`, `dns_tier`)
 2. When podman creates a container with the `terok.shield.profiles` annotation,
    it fires the stdlib-only hook script at the `createRuntime` stage
 3. The hook reads `state_dir` from annotations, applies `ruleset.nft` inside the
